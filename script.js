@@ -89,10 +89,17 @@ const tradeYoyTotals = [
   { name: "Multi-trade", color: "#667085", current: 5, previous: 0 },
 ];
 
+const STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
+const SAVE_DELAY_MS = 450;
+
 const tradeRows = document.getElementById("tradeRows");
 const goalInput = document.getElementById("goalInput");
 const mixBars = document.getElementById("mixBars");
 const comparisonChart = document.getElementById("comparisonChart");
+const saveButton = document.getElementById("saveButton");
+const saveStatus = document.getElementById("saveStatus");
+
+let saveTimer = null;
 
 const icons = {
   hvac: `<svg viewBox="0 0 24 24" role="img"><path d="M12 2v20M4.2 6l15.6 12M4.2 18 19.8 6M7.2 3.8 12 7l4.8-3.2M7.2 20.2 12 17l4.8 3.2M2.7 9.3 7.8 9l2.5-4.5M21.3 14.7l-5.1.3-2.5 4.5M2.7 14.7l5.1.3 2.5 4.5M21.3 9.3l-5.1-.3-2.5-4.5"/></svg>`,
@@ -105,7 +112,8 @@ const icons = {
 };
 
 function cleanNumber(value) {
-  return Math.max(Number(value || 0), 0);
+  const number = Number(value || 0);
+  return Number.isFinite(number) ? Math.max(number, 0) : 0;
 }
 
 function formatPercent(value) {
@@ -118,6 +126,84 @@ function formatDelta(value) {
 
 function formatNumber(value) {
   return value.toLocaleString("en-US");
+}
+
+function formatSavedAt(value) {
+  const savedAt = new Date(value);
+
+  if (Number.isNaN(savedAt.getTime())) return "";
+
+  return savedAt.toLocaleString("en-US", {
+    month: "short",
+    day: "numeric",
+    hour: "numeric",
+    minute: "2-digit",
+  });
+}
+
+function setSaveStatus(message, state = "saved") {
+  saveStatus.textContent = message;
+  saveStatus.dataset.state = state;
+}
+
+function getDashboardState() {
+  return {
+    goal: cleanNumber(goalInput.value),
+    savedAt: new Date().toISOString(),
+    trades: trades.map((trade) => ({
+      name: trade.name,
+      weeks: trade.weeks.map(cleanNumber),
+    })),
+  };
+}
+
+function saveDashboardState() {
+  clearTimeout(saveTimer);
+  saveTimer = null;
+
+  const state = getDashboardState();
+
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    setSaveStatus(`Saved ${formatSavedAt(state.savedAt)}`);
+  } catch (error) {
+    setSaveStatus("Save failed", "error");
+  }
+}
+
+function queueDashboardSave() {
+  setSaveStatus("Saving...", "saving");
+  clearTimeout(saveTimer);
+  saveTimer = window.setTimeout(saveDashboardState, SAVE_DELAY_MS);
+}
+
+function loadSavedDashboardState() {
+  try {
+    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+
+    if (!saved) {
+      setSaveStatus("Not saved yet", "idle");
+      return;
+    }
+
+    if (Number.isFinite(Number(saved.goal))) {
+      goalInput.value = cleanNumber(saved.goal);
+    }
+
+    if (Array.isArray(saved.trades)) {
+      trades.forEach((trade) => {
+        const savedTrade = saved.trades.find((item) => item.name === trade.name);
+
+        if (!Array.isArray(savedTrade?.weeks)) return;
+
+        trade.weeks = trade.weeks.map((_, index) => cleanNumber(savedTrade.weeks[index]));
+      });
+    }
+
+    setSaveStatus(saved.savedAt ? `Saved ${formatSavedAt(saved.savedAt)}` : "Saved");
+  } catch (error) {
+    setSaveStatus("Saved data unreadable", "error");
+  }
 }
 
 function buildDonutGradient(tradeTotals, total) {
@@ -182,6 +268,7 @@ function renderRows() {
       const weekIndex = Number(input.dataset.week);
       trades[tradeIndex].weeks[weekIndex] = cleanNumber(input.value);
       updateTotals();
+      queueDashboardSave();
     });
   });
 }
@@ -400,7 +487,13 @@ function renderWeeklyComparisonChart(weekTotals, references) {
   `;
 }
 
-goalInput.addEventListener("input", updateTotals);
+goalInput.addEventListener("input", () => {
+  updateTotals();
+  queueDashboardSave();
+});
 
+saveButton.addEventListener("click", saveDashboardState);
+
+loadSavedDashboardState();
 renderRows();
 updateTotals();

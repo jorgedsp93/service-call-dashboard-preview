@@ -137,7 +137,7 @@ h1 {
 .summary-card {
   align-items: center;
   display: grid;
-  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr);
+  grid-template-columns: minmax(0, 1fr) 1px minmax(0, 1fr) 1px minmax(170px, auto);
   min-height: 92px;
   padding: 16px 30px;
 }
@@ -221,6 +221,69 @@ svg {
 .summary-divider {
   background: var(--line);
   height: 62px;
+}
+
+.save-panel {
+  align-items: center;
+  display: flex;
+  gap: 12px;
+  justify-content: flex-end;
+  min-width: 0;
+}
+
+.save-button {
+  align-items: center;
+  appearance: none;
+  background: var(--green-700);
+  border: 1px solid var(--green-700);
+  border-radius: 999px;
+  color: #fff;
+  cursor: pointer;
+  display: inline-flex;
+  flex: 0 0 auto;
+  font: inherit;
+  font-size: 14px;
+  font-weight: 850;
+  gap: 7px;
+  height: 42px;
+  justify-content: center;
+  line-height: 1;
+  padding: 0 16px;
+}
+
+.save-button svg {
+  height: 17px;
+  stroke-width: 2.4;
+  width: 17px;
+}
+
+.save-button:hover {
+  background: #08753c;
+  border-color: #08753c;
+}
+
+.save-button:focus-visible {
+  box-shadow: 0 0 0 3px rgba(21, 150, 79, 0.18);
+  outline: none;
+}
+
+.save-status {
+  color: var(--muted);
+  display: inline-flex;
+  flex: 0 1 auto;
+  font-size: 12px;
+  font-weight: 800;
+  line-height: 1.15;
+  max-width: 116px;
+  min-width: 0;
+}
+
+.save-status[data-state="saving"] {
+  color: #9b6a12;
+}
+
+.save-status[data-state="error"] {
+  color: #b44b3f;
 }
 
 .content-grid {
