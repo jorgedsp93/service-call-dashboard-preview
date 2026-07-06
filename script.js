@@ -91,6 +91,7 @@ const tradeYoyTotals = [
 
 const STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
 const SAVE_DELAY_MS = 450;
+const LIVE_POLL_INTERVAL_MS = 2000;
 const SHARED_STATE_ENDPOINT = "/api/dashboard-state";
 
 const tradeRows = document.getElementById("tradeRows");
@@ -101,6 +102,10 @@ const saveButton = document.getElementById("saveButton");
 const saveStatus = document.getElementById("saveStatus");
 
 let saveTimer = null;
+let latestSharedRevision = 0;
+let latestSharedSavedAt = 0;
+let livePollTimer = null;
+const pendingPatchMap = new Map();
 
 const icons = {
   hvac: `<svg viewBox="0 0 24 24" role="img"><path d="M12 2v20M4.2 6l15.6 12M4.2 18 19.8 6M7.2 3.8 12 7l4.8-3.2M7.2 20.2 12 17l4.8 3.2M2.7 9.3 7.8 9l2.5-4.5M21.3 14.7l-5.1.3-2.5 4.5M2.7 14.7l5.1.3 2.5 4.5M21.3 9.3l-5.1-.3-2.5-4.5"/></svg>`,
@@ -152,9 +157,29 @@ function getStateTime(state) {
   return Number.isFinite(time) ? time : 0;
 }
 
+function getStateRevision(state) {
+  return Number.isFinite(Number(state?.revision)) ? Number(state.revision) : 0;
+}
+
+function isSharedStateNewer(state) {
+  const revision = getStateRevision(state);
+  const savedAt = getStateTime(state);
+
+  if (revision > latestSharedRevision) return true;
+  if (revision === latestSharedRevision && savedAt > latestSharedSavedAt) return true;
+
+  return false;
+}
+
+function rememberSharedState(state) {
+  latestSharedRevision = Math.max(latestSharedRevision, getStateRevision(state));
+  latestSharedSavedAt = Math.max(latestSharedSavedAt, getStateTime(state));
+}
+
 function getDashboardState() {
   return {
     goal: cleanNumber(goalInput.value),
+    revision: latestSharedRevision,
     savedAt: new Date().toISOString(),
     trades: trades.map((trade) => ({
       name: trade.name,
@@ -180,26 +205,62 @@ function readLocalDashboardState() {
   }
 }
 
-function applyDashboardState(state) {
+function getFocusedField() {
+  const activeElement = document.activeElement;
+
+  if (activeElement === goalInput) {
+    return { type: "goal" };
+  }
+
+  if (activeElement?.classList?.contains("number-input")) {
+    return {
+      tradeIndex: Number(activeElement.dataset.trade),
+      type: "cell",
+      weekIndex: Number(activeElement.dataset.week),
+    };
+  }
+
+  return null;
+}
+
+function applyDashboardState(state, { skipFocused = false } = {}) {
   if (!state || typeof state !== "object") return;
 
-  if (Number.isFinite(Number(state.goal))) {
+  const focusedField = skipFocused ? getFocusedField() : null;
+
+  if (Number.isFinite(Number(state.goal)) && focusedField?.type !== "goal") {
     goalInput.value = cleanNumber(state.goal);
   }
 
   if (Array.isArray(state.trades)) {
-    trades.forEach((trade) => {
+    trades.forEach((trade, tradeIndex) => {
       const savedTrade = state.trades.find((item) => item.name === trade.name);
 
       if (!Array.isArray(savedTrade?.weeks)) return;
 
-      trade.weeks = trade.weeks.map((_, index) => cleanNumber(savedTrade.weeks[index]));
+      trade.weeks = trade.weeks.map((value, weekIndex) => {
+        const shouldKeepFocusedCell =
+          focusedField?.type === "cell" &&
+          focusedField.tradeIndex === tradeIndex &&
+          focusedField.weekIndex === weekIndex;
+
+        return shouldKeepFocusedCell ? value : cleanNumber(savedTrade.weeks[weekIndex]);
+      });
     });
   }
 
   document.querySelectorAll(".number-input").forEach((input) => {
     const tradeIndex = Number(input.dataset.trade);
     const weekIndex = Number(input.dataset.week);
+
+    if (
+      focusedField?.type === "cell" &&
+      focusedField.tradeIndex === tradeIndex &&
+      focusedField.weekIndex === weekIndex
+    ) {
+      return;
+    }
+
     input.value = trades[tradeIndex].weeks[weekIndex] || "";
   });
 
@@ -233,7 +294,8 @@ async function loadSharedDashboardState(localState) {
     if (sharedState && getStateTime(sharedState) >= getStateTime(localState)) {
       applyDashboardState(sharedState);
       writeLocalDashboardState(sharedState);
-      setSaveStatus(`Shared save ${formatSavedAt(sharedState.savedAt)}`);
+      rememberSharedState(sharedState);
+      setSaveStatus(sharedState.savedAt ? `Shared save ${formatSavedAt(sharedState.savedAt)}` : "Live updates on");
       return;
     }
 
@@ -253,11 +315,22 @@ async function loadSharedDashboardState(localState) {
   }
 }
 
-async function saveDashboardState() {
+function getPatchKey(patch) {
+  if (patch.type === "goal") return "goal";
+  return `${patch.tradeName}:${patch.weekIndex}`;
+}
+
+function queuePatch(patch) {
+  pendingPatchMap.set(getPatchKey(patch), patch);
+}
+
+async function saveDashboardState({ forceFullSave = false } = {}) {
   clearTimeout(saveTimer);
   saveTimer = null;
 
   const state = getDashboardState();
+  const patches = forceFullSave ? [] : [...pendingPatchMap.values()];
+
   writeLocalDashboardState(state);
   setSaveStatus("Saving shared...", "saving");
 
@@ -265,7 +338,7 @@ async function saveDashboardState() {
     const response = await fetch(SHARED_STATE_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify({ state }),
+      body: JSON.stringify(patches.length ? { patches, state } : { state }),
     });
 
     if (!response.ok) {
@@ -274,17 +347,60 @@ async function saveDashboardState() {
 
     const payload = await response.json();
     const savedState = payload.state || state;
+    pendingPatchMap.clear();
+    applyDashboardState(savedState);
     writeLocalDashboardState(savedState);
+    rememberSharedState(savedState);
     setSaveStatus(`Saved for everyone ${formatSavedAt(savedState.savedAt)}`);
   } catch (error) {
     setSaveStatus(`Saved here only ${formatSavedAt(state.savedAt)}`, "warning");
   }
 }
 
-function queueDashboardSave() {
+function queueDashboardSave(patch) {
+  if (patch) queuePatch(patch);
   setSaveStatus("Saving...", "saving");
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(saveDashboardState, SAVE_DELAY_MS);
+}
+
+async function refreshSharedDashboardState({ showSyncedStatus = false } = {}) {
+  if (pendingPatchMap.size || saveTimer) return;
+
+  try {
+    const response = await fetch(SHARED_STATE_ENDPOINT, { cache: "no-store" });
+
+    if (!response.ok) {
+      throw new Error("Shared save unavailable.");
+    }
+
+    const payload = await response.json();
+    const sharedState = payload.state;
+
+    if (!sharedState) {
+      if (showSyncedStatus) setSaveStatus("Live updates on", "saved");
+      return;
+    }
+
+    if (isSharedStateNewer(sharedState)) {
+      applyDashboardState(sharedState, { skipFocused: true });
+      writeLocalDashboardState(sharedState);
+      rememberSharedState(sharedState);
+      setSaveStatus(sharedState.savedAt ? `Live update ${formatSavedAt(sharedState.savedAt)}` : "Live updates on");
+      return;
+    }
+
+    if (showSyncedStatus) {
+      setSaveStatus("Live updates on", "saved");
+    }
+  } catch (error) {
+    setSaveStatus("Live updates offline", "warning");
+  }
+}
+
+function startLiveUpdates() {
+  clearInterval(livePollTimer);
+  livePollTimer = window.setInterval(refreshSharedDashboardState, LIVE_POLL_INTERVAL_MS);
 }
 
 function buildDonutGradient(tradeTotals, total) {
@@ -349,7 +465,12 @@ function renderRows() {
       const weekIndex = Number(input.dataset.week);
       trades[tradeIndex].weeks[weekIndex] = cleanNumber(input.value);
       updateTotals();
-      queueDashboardSave();
+      queueDashboardSave({
+        tradeName: trades[tradeIndex].name,
+        type: "cell",
+        value: trades[tradeIndex].weeks[weekIndex],
+        weekIndex,
+      });
     });
   });
 }
@@ -570,12 +691,16 @@ function renderWeeklyComparisonChart(weekTotals, references) {
 
 goalInput.addEventListener("input", () => {
   updateTotals();
-  queueDashboardSave();
+  queueDashboardSave({
+    type: "goal",
+    value: cleanNumber(goalInput.value),
+  });
 });
 
-saveButton.addEventListener("click", saveDashboardState);
+saveButton.addEventListener("click", () => saveDashboardState({ forceFullSave: true }));
 
 renderRows();
 const localState = loadSavedDashboardState();
 updateTotals();
 loadSharedDashboardState(localState);
+startLiveUpdates();
