@@ -1,6 +1,8 @@
 import { del, list, put } from "@vercel/blob";
 
 const FIELD_PREFIX = "dashboard-state/live-fields";
+const LOCK_PREFIX = "dashboard-state/live-locks";
+const FIELD_LOCK_MS = 10000;
 
 const DEFAULT_TRADES = [
   { id: "hvac", name: "HVAC", weeks: [17, 0, 0, 0] },
@@ -14,6 +16,17 @@ const DEFAULT_TRADES = [
 
 const TRADE_NAMES = new Set(DEFAULT_TRADES.map((trade) => trade.name));
 
+class FieldLockError extends Error {
+  constructor(patch, lock, state) {
+    super("This field was just changed in another session.");
+    this.name = "FieldLockError";
+    this.statusCode = 409;
+    this.patch = patch;
+    this.lock = lock;
+    this.state = state;
+  }
+}
+
 function send(response, status, body) {
   response.status(status).setHeader("Cache-Control", "no-store");
   response.setHeader("Content-Type", "application/json; charset=utf-8");
@@ -23,6 +36,16 @@ function send(response, status, body) {
 function cleanNumber(value) {
   const number = Number(value || 0);
   return Number.isFinite(number) ? Math.max(Math.round(number), 0) : 0;
+}
+
+function normalizeClientId(value) {
+  return typeof value === "string" ? value.slice(0, 120) : "";
+}
+
+function wait(milliseconds) {
+  return new Promise((resolve) => {
+    setTimeout(resolve, milliseconds);
+  });
 }
 
 function createDefaultState() {
@@ -92,6 +115,10 @@ function getFieldBase(patch) {
 function getFieldPath(patch, revision) {
   const suffix = Math.random().toString(36).slice(2, 8);
   return `${getFieldBase(patch)}/${revision}-${suffix}.json`;
+}
+
+function getFieldLockPath(patch) {
+  return `${getFieldBase(patch).replace(FIELD_PREFIX, LOCK_PREFIX)}.json`;
 }
 
 function parseFieldPath(pathname) {
@@ -204,6 +231,16 @@ async function readBody(request) {
   return rawBody ? JSON.parse(rawBody) : null;
 }
 
+async function readPrivateJsonBlob(blob) {
+  const response = await fetch(blob.url, {
+    headers: {
+      Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
+    },
+  });
+
+  return response.ok ? response.json() : null;
+}
+
 function rememberField(state, record) {
   if (!record) return;
 
@@ -258,25 +295,163 @@ async function readDashboardState() {
 
   await Promise.all(
     [...latestFields.values()].map(async ({ blob }) => {
-      const response = await fetch(blob.url, {
-        headers: {
-          Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
-        },
-      });
-
-      if (!response.ok) return;
-
-      rememberField(state, await response.json());
+      rememberField(state, await readPrivateJsonBlob(blob));
     }),
   );
 
   return state;
 }
 
-async function saveField(patch, savedBy) {
+async function readLatestFieldRecord(patch) {
+  let latestBlob = null;
+  let latestParsedField = null;
+  let cursor;
+
+  do {
+    const result = await list({
+      cursor,
+      limit: 1000,
+      prefix: `${getFieldBase(patch)}/`,
+    });
+
+    result.blobs.forEach((blob) => {
+      const parsedField = parseFieldPath(blob.pathname);
+
+      if (!parsedField) return;
+
+      if (!latestParsedField || parsedField.revision > latestParsedField.revision) {
+        latestBlob = blob;
+        latestParsedField = parsedField;
+      }
+    });
+
+    cursor = result.hasMore ? result.cursor : undefined;
+  } while (cursor);
+
+  return latestBlob ? readPrivateJsonBlob(latestBlob) : null;
+}
+
+async function readFieldLock(lockPath) {
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const result = await list({
+      limit: 10,
+      prefix: lockPath,
+    });
+    const lockBlob = result.blobs.find((blob) => blob.pathname === lockPath);
+
+    if (lockBlob) {
+      return readPrivateJsonBlob(lockBlob);
+    }
+
+    if (attempt < 2) {
+      await wait(120);
+    }
+  }
+
+  return null;
+}
+
+function isRecentExternalChange(record, clientId) {
+  const savedAt = Date.parse(record?.savedAt || "");
+
+  if (!clientId || !record?.clientId || record.clientId === clientId || !Number.isFinite(savedAt)) {
+    return false;
+  }
+
+  return Date.now() - savedAt < FIELD_LOCK_MS;
+}
+
+function createFieldLock(patch, clientId) {
+  const savedAt = new Date();
+
+  return {
+    ...patch,
+    clientId,
+    expiresAt: new Date(savedAt.getTime() + FIELD_LOCK_MS).toISOString(),
+    savedAt: savedAt.toISOString(),
+  };
+}
+
+function isBlobAlreadyExistsError(error) {
+  return /already exists|allowOverwrite/i.test(error?.message || "");
+}
+
+async function assertFieldCanBeEdited(patch, clientId) {
+  const latestRecord = await readLatestFieldRecord(patch);
+
+  if (isRecentExternalChange(latestRecord, clientId)) {
+    throw new FieldLockError(patch, latestRecord, await readDashboardState());
+  }
+}
+
+async function acquireFieldLock(patch, clientId) {
+  if (!clientId) return;
+
+  const lockPath = getFieldLockPath(patch);
+  const lockRecord = createFieldLock(patch, clientId);
+
+  try {
+    await put(lockPath, JSON.stringify(lockRecord), {
+      access: "private",
+      allowOverwrite: false,
+      cacheControlMaxAge: 0,
+      contentType: "application/json",
+    });
+    return;
+  } catch (error) {
+    const existingLock = await readFieldLock(lockPath);
+
+    if (!existingLock) {
+      if (isBlobAlreadyExistsError(error)) {
+        await wait(250);
+        throw new FieldLockError(patch, lockRecord, await readDashboardState());
+      }
+
+      throw error;
+    }
+
+    if (isRecentExternalChange(existingLock, clientId)) {
+      throw new FieldLockError(patch, existingLock, await readDashboardState());
+    }
+
+    await put(lockPath, JSON.stringify(lockRecord), {
+      access: "private",
+      allowOverwrite: true,
+      cacheControlMaxAge: 0,
+      contentType: "application/json",
+    });
+  }
+}
+
+async function clearFieldLocks() {
+  try {
+    const lockPaths = [];
+    let cursor;
+
+    do {
+      const result = await list({
+        cursor,
+        limit: 1000,
+        prefix: `${LOCK_PREFIX}/`,
+      });
+
+      lockPaths.push(...result.blobs.map((blob) => blob.pathname));
+      cursor = result.hasMore ? result.cursor : undefined;
+    } while (cursor);
+
+    if (lockPaths.length) {
+      await del(lockPaths);
+    }
+  } catch (error) {
+    // Stale locks expire quickly, so cleanup failure should not block a forced save.
+  }
+}
+
+async function saveField(patch, savedBy, clientId) {
   const revision = Date.now();
   const record = {
     ...patch,
+    clientId,
     revision,
     savedAt: new Date().toISOString(),
     savedBy,
@@ -318,6 +493,8 @@ async function cleanupOldFieldRecords(patch, revision) {
 
 async function saveDashboardUpdate(body) {
   const savedBy = typeof body?.savedBy === "string" ? body.savedBy.slice(0, 80) : "";
+  const clientId = normalizeClientId(body?.clientId);
+  const force = body?.force === true;
   const patches = Array.isArray(body?.patches)
     ? body.patches.map(normalizePatch)
     : body?.patch
@@ -329,7 +506,18 @@ async function saveDashboardUpdate(body) {
   }
 
   const state = await readDashboardState();
-  const records = await Promise.all(patches.map((patch) => saveField(patch, savedBy)));
+
+  if (force) {
+    await clearFieldLocks();
+  } else {
+    for (const patch of patches) {
+      await assertFieldCanBeEdited(patch, clientId);
+      await acquireFieldLock(patch, clientId);
+    }
+  }
+
+  const fieldClientId = force ? "" : clientId;
+  const records = await Promise.all(patches.map((patch) => saveField(patch, savedBy, fieldClientId)));
 
   records.forEach((record) => {
     applyPatch(state, record);
@@ -365,7 +553,11 @@ export default async function handler(request, response) {
         updatedAt: state.savedAt || null,
       });
     } catch (error) {
-      send(response, 400, { error: error.message || "Unable to save dashboard state." });
+      send(response, error.statusCode || 400, {
+        error: error.message || "Unable to save dashboard state.",
+        lockExpiresAt: error.lock?.expiresAt || null,
+        state: error.state || null,
+      });
     }
 
     return;

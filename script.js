@@ -90,6 +90,7 @@ const tradeYoyTotals = [
 ];
 
 const STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
+const CLIENT_ID_KEY = "meadowbrookServiceCallDashboardClient:v1";
 const SAVE_DELAY_MS = 450;
 const LIVE_POLL_INTERVAL_MS = 5000;
 const SHARED_STATE_ENDPOINT = "/api/dashboard-state";
@@ -105,6 +106,7 @@ let latestSharedRevision = 0;
 let latestSharedSavedAt = 0;
 let livePollTimer = null;
 const pendingPatchMap = new Map();
+const dashboardClientId = getDashboardClientId();
 
 const icons = {
   hvac: `<svg viewBox="0 0 24 24" role="img"><path d="M12 2v20M4.2 6l15.6 12M4.2 18 19.8 6M7.2 3.8 12 7l4.8-3.2M7.2 20.2 12 17l4.8 3.2M2.7 9.3 7.8 9l2.5-4.5M21.3 14.7l-5.1.3-2.5 4.5M2.7 14.7l5.1.3 2.5 4.5M21.3 9.3l-5.1-.3-2.5-4.5"/></svg>`,
@@ -144,6 +146,24 @@ function formatSavedAt(value) {
     hour: "numeric",
     minute: "2-digit",
   });
+}
+
+function createFallbackId() {
+  return `client-${Date.now().toString(36)}-${Math.random().toString(36).slice(2, 10)}`;
+}
+
+function getDashboardClientId() {
+  try {
+    const savedClientId = localStorage.getItem(CLIENT_ID_KEY);
+
+    if (savedClientId) return savedClientId;
+
+    const clientId = globalThis.crypto?.randomUUID ? globalThis.crypto.randomUUID() : createFallbackId();
+    localStorage.setItem(CLIENT_ID_KEY, clientId);
+    return clientId;
+  } catch (error) {
+    return createFallbackId();
+  }
 }
 
 function setSaveStatus(message, state = "saved") {
@@ -257,17 +277,11 @@ async function loadSharedDashboardState(localState) {
     const payload = await response.json();
     const sharedState = payload.state;
 
-    if (sharedState && getStateTime(sharedState) >= getStateTime(localState)) {
+    if (sharedState) {
       applyDashboardState(sharedState);
       writeLocalDashboardState(sharedState);
       rememberSharedState(sharedState);
       setSaveStatus(sharedState.savedAt ? `Shared save ${formatSavedAt(sharedState.savedAt)}` : "Live updates on");
-      return;
-    }
-
-    if (localState && getStateTime(localState) > getStateTime(sharedState)) {
-      applyDashboardState(localState);
-      await saveDashboardState();
       return;
     }
 
@@ -298,16 +312,38 @@ async function saveDashboardState({ forceFullSave = false } = {}) {
   const patches = forceFullSave ? [] : [...pendingPatchMap.values()];
 
   writeLocalDashboardState(state);
+
+  if (!patches.length && !forceFullSave) {
+    setSaveStatus("Live updates on", "saved");
+    return;
+  }
+
   setSaveStatus("Saving shared...", "saving");
 
   try {
+    const body = patches.length
+      ? { clientId: dashboardClientId, patches, state }
+      : { clientId: dashboardClientId, force: true, state };
+
     const response = await fetch(SHARED_STATE_ENDPOINT, {
       method: "POST",
       headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(patches.length ? { patches, state } : { state }),
+      body: JSON.stringify(body),
     });
 
     if (!response.ok) {
+      const errorPayload = await response.json().catch(() => null);
+
+      if (response.status === 409 && errorPayload?.state) {
+        const savedState = errorPayload.state;
+        pendingPatchMap.clear();
+        applyDashboardState(savedState);
+        writeLocalDashboardState(savedState);
+        rememberSharedState(savedState);
+        setSaveStatus("Recent edit locked this field", "warning");
+        return;
+      }
+
       throw new Error("Shared save failed.");
     }
 
