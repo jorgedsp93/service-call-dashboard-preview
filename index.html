@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>July Service Call Dashboard</title>
+    <title>Service Call Dashboard</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="sheet-preview">
-      <section class="dashboard-card" aria-label="July service call dashboard">
+      <section class="dashboard-card" aria-label="Service call dashboard">
         <header class="hero">
           <div class="hero-title">
-            <h1>July Service Call Dashboard</h1>
+            <h1 id="dashboardTitle">Service Call Dashboard</h1>
           </div>
           <img class="brand-logo" src="assets/meadowbrook-logo.png" alt="MeadowBrook" />
         </header>
@@ -51,7 +51,7 @@
             </div>
             <div class="summary-copy">
               <span>Last Updated</span>
-              <strong>July 3, 2026</strong>
+              <strong id="lastUpdatedValue">Not saved yet</strong>
             </div>
           </div>
 
@@ -120,7 +120,7 @@
               <div class="mix-header">
                 <div>
                   <h2>Trade Call Mix</h2>
-                  <p>Current share plus July YoY</p>
+                  <p id="mixSubtitle">Current share plus monthly YoY</p>
                 </div>
                 <strong id="leaderBadge">Plumbing leads by 15 calls</strong>
               </div>
@@ -133,7 +133,7 @@
               id="comparisonChart"
               class="comparison-chart"
               role="img"
-              aria-label="July service calls comparison chart"
+              aria-label="Monthly service calls comparison chart"
             ></div>
           </section>
         </section>

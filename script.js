@@ -1,11 +1,14 @@
+const LEGACY_PERIOD_KEY = "2026-07";
+const currentPeriod = getDashboardPeriod(new Date());
+
 const trades = [
-  { name: "HVAC", icon: "hvac", color: "#167a74", weeks: [17, 0, 0, 0] },
-  { name: "Plumbing", icon: "plumbing", color: "#7c5fb5", weeks: [32, 0, 0, 0] },
-  { name: "Electrical", icon: "electrical", color: "#df6b57", weeks: [2, 0, 0, 0] },
-  { name: "Handyman", icon: "handyman", color: "#3978c6", weeks: [4, 0, 0, 0] },
-  { name: "Subtrade", icon: "subtrade", color: "#d99a2b", weeks: [1, 0, 0, 0] },
-  { name: "Door & Dock", icon: "dock", color: "#2e9d63", weeks: [1, 0, 0, 0] },
-  { name: "Multi-trade", icon: "multi", color: "#667085", weeks: [0, 0, 0, 0] },
+  { name: "HVAC", icon: "hvac", color: "#167a74", weeks: getInitialWeeks([17, 0, 0, 0]) },
+  { name: "Plumbing", icon: "plumbing", color: "#7c5fb5", weeks: getInitialWeeks([32, 0, 0, 0]) },
+  { name: "Electrical", icon: "electrical", color: "#df6b57", weeks: getInitialWeeks([2, 0, 0, 0]) },
+  { name: "Handyman", icon: "handyman", color: "#3978c6", weeks: getInitialWeeks([4, 0, 0, 0]) },
+  { name: "Subtrade", icon: "subtrade", color: "#d99a2b", weeks: getInitialWeeks([1, 0, 0, 0]) },
+  { name: "Door & Dock", icon: "dock", color: "#2e9d63", weeks: getInitialWeeks([1, 0, 0, 0]) },
+  { name: "Multi-trade", icon: "multi", color: "#667085", weeks: getInitialWeeks([0, 0, 0, 0]) },
 ];
 
 const historicalServiceCalls = [
@@ -89,7 +92,8 @@ const tradeYoyTotals = [
   { name: "Multi-trade", color: "#667085", current: 5, previous: 0 },
 ];
 
-const STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
+const LEGACY_STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
+const STORAGE_KEY = `${LEGACY_STORAGE_KEY}:${currentPeriod.key}`;
 const CLIENT_ID_KEY = "meadowbrookServiceCallDashboardClient:v1";
 const SAVE_DELAY_MS = 450;
 const LIVE_POLL_INTERVAL_MS = 300000;
@@ -99,6 +103,9 @@ const tradeRows = document.getElementById("tradeRows");
 const goalInput = document.getElementById("goalInput");
 const mixBars = document.getElementById("mixBars");
 const comparisonChart = document.getElementById("comparisonChart");
+const dashboardTitle = document.getElementById("dashboardTitle");
+const lastUpdatedValue = document.getElementById("lastUpdatedValue");
+const mixSubtitle = document.getElementById("mixSubtitle");
 const saveStatus = document.getElementById("saveStatus");
 
 let saveTimer = null;
@@ -117,6 +124,48 @@ const icons = {
   dock: `<svg viewBox="0 0 24 24" role="img"><path d="M4 20V5h16v15M7 20V8h10v12M7 12h10M7 16h10M4 5h16"/></svg>`,
   multi: `<svg viewBox="0 0 24 24" role="img"><path d="m14.5 6.5 3-3 3 3-3 3M13 8l3 3M5 20l6.5-6.5M8 17l-1.5-1.5M4 4l4 4M7 3l2 2-4 4-2-2 4-4ZM14 14l6 6M20 14l-6 6"/></svg>`,
 };
+
+function getDashboardPeriod(date) {
+  const year = date.getFullYear();
+  const monthIndex = date.getMonth();
+  const monthNumber = String(monthIndex + 1).padStart(2, "0");
+  const monthName = date.toLocaleString("en-US", { month: "long" });
+
+  return {
+    dataKey: monthName.toLowerCase(),
+    key: `${year}-${monthNumber}`,
+    monthName,
+    monthShort: date.toLocaleString("en-US", { month: "short" }),
+    year,
+  };
+}
+
+function getInitialWeeks(defaultWeeks) {
+  return currentPeriod.key === LEGACY_PERIOD_KEY ? [...defaultWeeks] : [0, 0, 0, 0];
+}
+
+function getSharedStateUrl() {
+  return `${SHARED_STATE_ENDPOINT}?period=${encodeURIComponent(currentPeriod.key)}`;
+}
+
+function updatePeriodLabels() {
+  const title = `${currentPeriod.monthName} Service Call Dashboard`;
+  document.title = title;
+  dashboardTitle.textContent = title;
+  document.querySelector(".dashboard-card").setAttribute("aria-label", `${currentPeriod.monthName} service call dashboard`);
+  mixSubtitle.textContent = `Current share plus ${currentPeriod.monthName} YoY`;
+  comparisonChart.setAttribute("aria-label", `${currentPeriod.monthName} service calls comparison chart`);
+}
+
+function setLastUpdated(value) {
+  lastUpdatedValue.textContent = value ? formatSavedAt(value) : "Not saved yet";
+}
+
+function checkForPeriodChange() {
+  if (getDashboardPeriod(new Date()).key !== currentPeriod.key) {
+    window.location.reload();
+  }
+}
 
 function cleanNumber(value) {
   const number = Number(value || 0);
@@ -200,6 +249,7 @@ function rememberSharedState(state) {
 function getDashboardState() {
   return {
     goal: cleanNumber(goalInput.value),
+    periodKey: currentPeriod.key,
     revision: latestSharedRevision,
     savedAt: new Date().toISOString(),
     trades: trades.map((trade) => ({
@@ -220,7 +270,9 @@ function writeLocalDashboardState(state) {
 
 function readLocalDashboardState() {
   try {
-    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+    const saved = localStorage.getItem(STORAGE_KEY);
+    const legacySaved = currentPeriod.key === LEGACY_PERIOD_KEY ? localStorage.getItem(LEGACY_STORAGE_KEY) : null;
+    return JSON.parse(saved || legacySaved || "null");
   } catch (error) {
     return null;
   }
@@ -250,6 +302,7 @@ function applyDashboardState(state) {
     input.value = trades[tradeIndex].weeks[weekIndex] || "";
   });
 
+  setLastUpdated(state.savedAt);
   updateTotals();
 }
 
@@ -268,7 +321,7 @@ function loadSavedDashboardState() {
 
 async function loadSharedDashboardState(localState) {
   try {
-    const response = await fetch(SHARED_STATE_ENDPOINT, { cache: "no-store" });
+    const response = await fetch(getSharedStateUrl(), { cache: "no-store" });
 
     if (!response.ok) {
       throw new Error("Shared save unavailable.");
@@ -322,10 +375,10 @@ async function saveDashboardState({ forceFullSave = false } = {}) {
 
   try {
     const body = patches.length
-      ? { clientId: dashboardClientId, patches, state }
-      : { clientId: dashboardClientId, force: true, state };
+      ? { clientId: dashboardClientId, patches, periodKey: currentPeriod.key, state }
+      : { clientId: dashboardClientId, force: true, periodKey: currentPeriod.key, state };
 
-    const response = await fetch(SHARED_STATE_ENDPOINT, {
+    const response = await fetch(getSharedStateUrl(), {
       method: "POST",
       headers: { "Content-Type": "application/json" },
       body: JSON.stringify(body),
@@ -371,7 +424,7 @@ async function refreshSharedDashboardState({ showSyncedStatus = false } = {}) {
   if (pendingPatchMap.size || saveTimer) return;
 
   try {
-    const response = await fetch(SHARED_STATE_ENDPOINT, { cache: "no-store" });
+    const response = await fetch(getSharedStateUrl(), { cache: "no-store" });
 
     if (!response.ok) {
       throw new Error("Shared save unavailable.");
@@ -540,8 +593,8 @@ function updateTradeMix(total) {
     .map((trade) => {
       const share = total > 0 ? (trade.total / total) * 100 : 0;
       const width = trade.total > 0 ? (trade.total / maxTradeTotal) * 100 : 0;
-      const yoy = tradeYoyTotals.find((item) => item.name === trade.name);
-      const lastJulyTotal = yoy?.current || 0;
+      const yoy = currentPeriod.dataKey === "july" ? tradeYoyTotals.find((item) => item.name === trade.name) : null;
+      const lastMonthTotal = yoy?.current || 0;
 
       return `
         <div class="mix-row">
@@ -556,7 +609,7 @@ function updateTradeMix(total) {
             <div class="mix-yoy">
               ${
                 yoy
-                  ? `<span class="yoy-year is-prior-year">Last July: <b>${lastJulyTotal} calls</b></span>`
+                  ? `<span class="yoy-year is-prior-year">Last ${currentPeriod.monthName}: <b>${lastMonthTotal} calls</b></span>`
                   : `<span class="yoy-year is-prior-year">No LY target</span>`
               }
             </div>
@@ -574,22 +627,24 @@ function updateTradeMix(total) {
 function updateHistoricalComparison(total, weekTotals) {
   const goal = cleanNumber(goalInput.value);
   const goalWeekly = Math.round(goal / 4);
-  const lastJulyWeekly = Math.round(historicalServiceCalls[0].july.total / 4);
-  const fiveYearWeekly = Math.round(
-    historicalServiceCalls.reduce((sum, item) => sum + item.july.total, 0) /
-      historicalServiceCalls.length /
-      4,
-  );
+  const historicalMonthRecords = historicalServiceCalls.map((item) => item[currentPeriod.dataKey]).filter(Boolean);
+  const hasHistory = historicalMonthRecords.length > 0;
+  const lastYearTotal = hasHistory ? historicalMonthRecords[0].total : 0;
+  const lastYearWeekly = hasHistory ? Math.round(lastYearTotal / 4) : 0;
+  const fiveYearWeekly = hasHistory
+    ? Math.round(historicalMonthRecords.reduce((sum, item) => sum + item.total, 0) / historicalMonthRecords.length / 4)
+    : 0;
   const latestWeekIndex = Math.max(weekTotals.findLastIndex((value) => value > 0), 0);
   const latestWeekTotal = weekTotals[latestWeekIndex] || 0;
-  const delta = latestWeekTotal - lastJulyWeekly;
 
   renderWeeklyComparisonChart(weekTotals, {
     fiveYearWeekly,
     goal,
     goalWeekly,
-    lastJulyTotal: historicalServiceCalls[0].july.total,
-    lastJulyWeekly,
+    hasHistory,
+    lastYearTotal,
+    lastYearWeekly,
+    monthName: currentPeriod.monthName,
     total,
   });
 }
@@ -600,17 +655,20 @@ function renderWeeklyComparisonChart(weekTotals, references) {
   const margin = { top: 22, right: 24, bottom: 62, left: 44 };
   const chartWidth = width - margin.left - margin.right;
   const chartHeight = height - margin.top - margin.bottom;
-  const maxValue = Math.ceil(Math.max(references.goalWeekly, references.lastJulyWeekly, ...weekTotals) * 1.12 / 10) * 10;
+  const referenceValues = references.hasHistory
+    ? [references.goalWeekly, references.lastYearWeekly, references.fiveYearWeekly]
+    : [references.goalWeekly];
+  const maxValue = Math.ceil(Math.max(10, ...referenceValues, ...weekTotals) * 1.12 / 10) * 10;
   const ticks = [0, Math.round(maxValue / 2), maxValue];
   const barWidth = 48;
   const gap = (chartWidth - barWidth * weekTotals.length) / (weekTotals.length - 1);
   const yFor = (value) => margin.top + chartHeight - (value / maxValue) * chartHeight;
   const baseline = margin.top + chartHeight;
-  const lastYearY = yFor(references.lastJulyWeekly);
+  const lastYearY = yFor(references.lastYearWeekly);
   const goalY = yFor(references.goalWeekly);
   const latestWeekIndex = Math.max(weekTotals.findLastIndex((value) => value > 0), 0);
   const latestWeekTotal = weekTotals[latestWeekIndex] || 0;
-  const latestDelta = latestWeekTotal - references.lastJulyWeekly;
+  const latestDelta = latestWeekTotal - references.lastYearWeekly;
 
   const gridLines = ticks
     .map((tick) => {
@@ -655,20 +713,31 @@ function renderWeeklyComparisonChart(weekTotals, references) {
 
   comparisonChart.setAttribute(
     "aria-label",
-    `Weekly July service calls chart. Current entered weeks total ${references.total}. Last July averaged ${references.lastJulyWeekly} calls per week, five year average is ${references.fiveYearWeekly} per week, and the goal pace is ${references.goalWeekly} per week.`,
+    references.hasHistory
+      ? `Weekly ${references.monthName} service calls chart. Current entered weeks total ${references.total}. Last ${references.monthName} averaged ${references.lastYearWeekly} calls per week, five year average is ${references.fiveYearWeekly} per week, and the goal pace is ${references.goalWeekly} per week.`
+      : `Weekly ${references.monthName} service calls chart. Current entered weeks total ${references.total}. No prior ${references.monthName} history is loaded, and the goal pace is ${references.goalWeekly} per week.`,
   );
+
+  const lastYearMarkup = references.hasHistory
+    ? `
+      <line class="last-year-line" x1="${margin.left}" y1="${lastYearY}" x2="${width - margin.right}" y2="${lastYearY}"></line>
+      <text class="last-year-label" x="${width - margin.right}" y="${lastYearY - 8}" text-anchor="end">
+        last year avg ${references.lastYearWeekly}/wk
+      </text>
+    `
+    : "";
 
   comparisonChart.innerHTML = `
     <div class="comparison-summary" aria-hidden="true">
       <div class="comparison-stat is-current">
         <span>Week ${latestWeekIndex + 1}</span>
         <strong>${formatNumber(latestWeekTotal)}</strong>
-        <em>${formatDelta(latestDelta)} vs LY avg</em>
+        <em>${references.hasHistory ? `${formatDelta(latestDelta)} vs LY avg` : "Current week"}</em>
       </div>
       <div class="comparison-stat">
         <span>Last Year Avg</span>
-        <strong>${references.lastJulyWeekly}/wk</strong>
-        <em>${formatNumber(historicalServiceCalls[0].july.total)} last July</em>
+        <strong>${references.hasHistory ? `${references.lastYearWeekly}/wk` : "N/A"}</strong>
+        <em>${references.hasHistory ? `${formatNumber(references.lastYearTotal)} last ${references.monthName}` : `No prior ${references.monthName} data`}</em>
       </div>
       <div class="comparison-stat">
         <span>Goal Pace</span>
@@ -693,10 +762,7 @@ function renderWeeklyComparisonChart(weekTotals, references) {
       <text class="goal-label" x="${width - margin.right}" y="${goalY - 8}" text-anchor="end">
         goal pace ${references.goalWeekly}/wk
       </text>
-      <line class="last-year-line" x1="${margin.left}" y1="${lastYearY}" x2="${width - margin.right}" y2="${lastYearY}"></line>
-      <text class="last-year-label" x="${width - margin.right}" y="${lastYearY - 8}" text-anchor="end">
-        last year avg ${references.lastJulyWeekly}/wk
-      </text>
+      ${lastYearMarkup}
       ${bars}
     </svg>
   `;
@@ -710,8 +776,10 @@ goalInput.addEventListener("input", () => {
   });
 });
 
+updatePeriodLabels();
 renderRows();
 const localState = loadSavedDashboardState();
 updateTotals();
 loadSharedDashboardState(localState);
 startLiveUpdates();
+window.setInterval(checkForPeriodChange, 60000);
