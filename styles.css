@@ -282,6 +282,10 @@ svg {
   color: #9b6a12;
 }
 
+.save-status[data-state="warning"] {
+  color: #9b6a12;
+}
+
 .save-status[data-state="error"] {
   color: #b44b3f;
 }

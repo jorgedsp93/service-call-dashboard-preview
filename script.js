@@ -91,6 +91,7 @@ const tradeYoyTotals = [
 
 const STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
 const SAVE_DELAY_MS = 450;
+const SHARED_STATE_ENDPOINT = "/api/dashboard-state";
 
 const tradeRows = document.getElementById("tradeRows");
 const goalInput = document.getElementById("goalInput");
@@ -146,6 +147,11 @@ function setSaveStatus(message, state = "saved") {
   saveStatus.dataset.state = state;
 }
 
+function getStateTime(state) {
+  const time = Date.parse(state?.savedAt || "");
+  return Number.isFinite(time) ? time : 0;
+}
+
 function getDashboardState() {
   return {
     goal: cleanNumber(goalInput.value),
@@ -157,17 +163,121 @@ function getDashboardState() {
   };
 }
 
-function saveDashboardState() {
+function writeLocalDashboardState(state) {
+  try {
+    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
+    return true;
+  } catch (error) {
+    return false;
+  }
+}
+
+function readLocalDashboardState() {
+  try {
+    return JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
+  } catch (error) {
+    return null;
+  }
+}
+
+function applyDashboardState(state) {
+  if (!state || typeof state !== "object") return;
+
+  if (Number.isFinite(Number(state.goal))) {
+    goalInput.value = cleanNumber(state.goal);
+  }
+
+  if (Array.isArray(state.trades)) {
+    trades.forEach((trade) => {
+      const savedTrade = state.trades.find((item) => item.name === trade.name);
+
+      if (!Array.isArray(savedTrade?.weeks)) return;
+
+      trade.weeks = trade.weeks.map((_, index) => cleanNumber(savedTrade.weeks[index]));
+    });
+  }
+
+  document.querySelectorAll(".number-input").forEach((input) => {
+    const tradeIndex = Number(input.dataset.trade);
+    const weekIndex = Number(input.dataset.week);
+    input.value = trades[tradeIndex].weeks[weekIndex] || "";
+  });
+
+  updateTotals();
+}
+
+function loadSavedDashboardState() {
+  const saved = readLocalDashboardState();
+
+  if (!saved) {
+    setSaveStatus("Loading shared save...", "saving");
+    return null;
+  }
+
+  applyDashboardState(saved);
+  setSaveStatus(saved.savedAt ? `Saved on this device ${formatSavedAt(saved.savedAt)}` : "Saved on this device");
+  return saved;
+}
+
+async function loadSharedDashboardState(localState) {
+  try {
+    const response = await fetch(SHARED_STATE_ENDPOINT, { cache: "no-store" });
+
+    if (!response.ok) {
+      throw new Error("Shared save unavailable.");
+    }
+
+    const payload = await response.json();
+    const sharedState = payload.state;
+
+    if (sharedState && getStateTime(sharedState) >= getStateTime(localState)) {
+      applyDashboardState(sharedState);
+      writeLocalDashboardState(sharedState);
+      setSaveStatus(`Shared save ${formatSavedAt(sharedState.savedAt)}`);
+      return;
+    }
+
+    if (localState && getStateTime(localState) > getStateTime(sharedState)) {
+      applyDashboardState(localState);
+      await saveDashboardState();
+      return;
+    }
+
+    setSaveStatus("Not saved yet", "idle");
+  } catch (error) {
+    if (localState?.savedAt) {
+      setSaveStatus(`Saved here only ${formatSavedAt(localState.savedAt)}`, "warning");
+    } else {
+      setSaveStatus("Shared save offline", "warning");
+    }
+  }
+}
+
+async function saveDashboardState() {
   clearTimeout(saveTimer);
   saveTimer = null;
 
   const state = getDashboardState();
+  writeLocalDashboardState(state);
+  setSaveStatus("Saving shared...", "saving");
 
   try {
-    localStorage.setItem(STORAGE_KEY, JSON.stringify(state));
-    setSaveStatus(`Saved ${formatSavedAt(state.savedAt)}`);
+    const response = await fetch(SHARED_STATE_ENDPOINT, {
+      method: "POST",
+      headers: { "Content-Type": "application/json" },
+      body: JSON.stringify({ state }),
+    });
+
+    if (!response.ok) {
+      throw new Error("Shared save failed.");
+    }
+
+    const payload = await response.json();
+    const savedState = payload.state || state;
+    writeLocalDashboardState(savedState);
+    setSaveStatus(`Saved for everyone ${formatSavedAt(savedState.savedAt)}`);
   } catch (error) {
-    setSaveStatus("Save failed", "error");
+    setSaveStatus(`Saved here only ${formatSavedAt(state.savedAt)}`, "warning");
   }
 }
 
@@ -175,35 +285,6 @@ function queueDashboardSave() {
   setSaveStatus("Saving...", "saving");
   clearTimeout(saveTimer);
   saveTimer = window.setTimeout(saveDashboardState, SAVE_DELAY_MS);
-}
-
-function loadSavedDashboardState() {
-  try {
-    const saved = JSON.parse(localStorage.getItem(STORAGE_KEY) || "null");
-
-    if (!saved) {
-      setSaveStatus("Not saved yet", "idle");
-      return;
-    }
-
-    if (Number.isFinite(Number(saved.goal))) {
-      goalInput.value = cleanNumber(saved.goal);
-    }
-
-    if (Array.isArray(saved.trades)) {
-      trades.forEach((trade) => {
-        const savedTrade = saved.trades.find((item) => item.name === trade.name);
-
-        if (!Array.isArray(savedTrade?.weeks)) return;
-
-        trade.weeks = trade.weeks.map((_, index) => cleanNumber(savedTrade.weeks[index]));
-      });
-    }
-
-    setSaveStatus(saved.savedAt ? `Saved ${formatSavedAt(saved.savedAt)}` : "Saved");
-  } catch (error) {
-    setSaveStatus("Saved data unreadable", "error");
-  }
 }
 
 function buildDonutGradient(tradeTotals, total) {
@@ -494,6 +575,7 @@ goalInput.addEventListener("input", () => {
 
 saveButton.addEventListener("click", saveDashboardState);
 
-loadSavedDashboardState();
 renderRows();
+const localState = loadSavedDashboardState();
 updateTotals();
+loadSharedDashboardState(localState);
