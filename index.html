@@ -1,0 +1,138 @@
+<!doctype html>
+<html lang="en">
+  <head>
+    <meta charset="UTF-8" />
+    <meta name="viewport" content="width=device-width, initial-scale=1.0" />
+    <title>July Service Call Dashboard</title>
+    <link rel="stylesheet" href="styles.css" />
+  </head>
+  <body>
+    <main class="sheet-preview">
+      <section class="dashboard-card" aria-label="July service call dashboard">
+        <header class="hero">
+          <div class="hero-title">
+            <h1>July Service Call Dashboard</h1>
+          </div>
+          <img class="brand-logo" src="assets/meadowbrook-logo.png" alt="MeadowBrook" />
+        </header>
+
+        <section class="summary-card" aria-label="Dashboard summary">
+          <div class="summary-item">
+            <div class="summary-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img">
+                <circle cx="12" cy="12" r="7" />
+                <circle cx="12" cy="12" r="2.8" />
+                <path d="M12 5V2.5M19 12h2.5M12 19v2.5M2.5 12H5M16.8 7.2l1.7-1.7" />
+              </svg>
+            </div>
+            <label class="summary-copy" for="goalInput">
+              <span>Service Call Goal</span>
+              <input
+                id="goalInput"
+                class="goal-input"
+                type="number"
+                min="0"
+                step="1"
+                value="396"
+                aria-label="Service call goal"
+              />
+            </label>
+          </div>
+
+          <div class="summary-divider" aria-hidden="true"></div>
+
+          <div class="summary-item">
+            <div class="summary-icon" aria-hidden="true">
+              <svg viewBox="0 0 24 24" role="img">
+                <path d="M7 2.5v4M17 2.5v4M4 9h16" />
+                <rect x="4" y="5" width="16" height="16" rx="2.5" />
+                <path d="M8 13h2M12 13h2M16 13h2M8 17h2M12 17h2M16 17h2" />
+              </svg>
+            </div>
+            <div class="summary-copy">
+              <span>Last Updated</span>
+              <strong>July 3, 2026</strong>
+            </div>
+          </div>
+        </section>
+
+        <section class="content-grid" aria-label="Dashboard details">
+          <div class="left-stack">
+            <section class="table-card" aria-label="Weekly service calls by trade">
+              <table>
+                <thead>
+                  <tr>
+                    <th scope="col">Trade</th>
+                    <th scope="col">Week 1</th>
+                    <th scope="col">Week 2</th>
+                    <th scope="col">Week 3</th>
+                    <th scope="col">Week 4</th>
+                    <th scope="col">Total Per Trade</th>
+                  </tr>
+                </thead>
+                <tbody id="tradeRows"></tbody>
+                <tfoot>
+                  <tr>
+                    <th scope="row">Estimated Week Total</th>
+                    <td id="weekTotal0">57</td>
+                    <td id="weekTotal1">0</td>
+                    <td id="weekTotal2">0</td>
+                    <td id="weekTotal3">0</td>
+                    <td id="monthTotal">57</td>
+                  </tr>
+                </tfoot>
+              </table>
+            </section>
+
+            <section class="progress-card" aria-label="Progress to goal">
+              <div class="progress-header">
+                <h2>Progress to Goal:</h2>
+                <strong id="progressPercent">14%</strong>
+              </div>
+              <div class="progress-track">
+                <div id="progressFill" class="progress-fill"></div>
+              </div>
+              <div class="progress-labels">
+                <span id="progressTotal">57</span>
+                <span id="progressGoal">396</span>
+              </div>
+            </section>
+          </div>
+
+          <aside class="mix-card" aria-label="Trade call mix">
+            <div class="mix-visual">
+              <div id="mixDonut" class="mix-donut" role="img" aria-label="Trade call mix chart">
+                <div class="donut-center">
+                  <span>Top Trade</span>
+                  <strong id="topTradeName">Plumbing</strong>
+                  <small id="topTradeShare">56%</small>
+                </div>
+              </div>
+            </div>
+            <div class="mix-detail">
+              <div class="mix-header">
+                <div>
+                  <h2>Trade Call Mix</h2>
+                  <p>Current share plus July YoY</p>
+                </div>
+                <strong id="leaderBadge">Plumbing leads by 15 calls</strong>
+              </div>
+              <div id="mixBars" class="mix-bars"></div>
+            </div>
+          </aside>
+
+          <section class="comparison-card" aria-label="Prior year service call comparison">
+            <div
+              id="comparisonChart"
+              class="comparison-chart"
+              role="img"
+              aria-label="July service calls comparison chart"
+            ></div>
+          </section>
+        </section>
+      </section>
+    </main>
+
+    <script src="script.js"></script>
+  </body>
+</html>
