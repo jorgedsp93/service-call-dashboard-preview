@@ -1,4 +1,4 @@
-import { list, put } from "@vercel/blob";
+import { del, list, put } from "@vercel/blob";
 
 const FIELD_PREFIX = "dashboard-state/live-fields";
 
@@ -289,7 +289,31 @@ async function saveField(patch, savedBy) {
     contentType: "application/json",
   });
 
+  await cleanupOldFieldRecords(patch, revision);
+
   return record;
+}
+
+async function cleanupOldFieldRecords(patch, revision) {
+  try {
+    const result = await list({
+      limit: 1000,
+      prefix: `${getFieldBase(patch)}/`,
+    });
+
+    const oldPaths = result.blobs
+      .map((blob) => {
+        const parsedField = parseFieldPath(blob.pathname);
+        return parsedField && parsedField.revision < revision ? blob.pathname : null;
+      })
+      .filter(Boolean);
+
+    if (oldPaths.length) {
+      await del(oldPaths);
+    }
+  } catch (error) {
+    // Cleanup is best effort; failed cleanup should not block user saves.
+  }
 }
 
 async function saveDashboardUpdate(body) {

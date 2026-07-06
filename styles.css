@@ -225,50 +225,29 @@ svg {
 
 .save-panel {
   align-items: center;
-  display: flex;
-  gap: 12px;
-  justify-content: flex-end;
-  min-width: 0;
-}
-
-.save-button {
-  align-items: center;
-  appearance: none;
-  background: var(--green-700);
-  border: 1px solid var(--green-700);
+  background: var(--green-100);
+  border: 1px solid #cce8d3;
   border-radius: 999px;
-  color: #fff;
-  cursor: pointer;
-  display: inline-flex;
+  display: flex;
+  gap: 8px;
+  justify-content: flex-end;
+  justify-self: end;
+  min-width: 0;
+  padding: 10px 13px;
+  width: fit-content;
+}
+
+.sync-dot {
+  background: var(--green-700);
+  border-radius: 999px;
+  box-shadow: 0 0 0 4px rgba(12, 136, 69, 0.12);
   flex: 0 0 auto;
-  font: inherit;
-  font-size: 14px;
-  font-weight: 850;
-  gap: 7px;
-  height: 42px;
-  justify-content: center;
-  line-height: 1;
-  padding: 0 16px;
-}
-
-.save-button svg {
-  height: 17px;
-  stroke-width: 2.4;
-  width: 17px;
-}
-
-.save-button:hover {
-  background: #08753c;
-  border-color: #08753c;
-}
-
-.save-button:focus-visible {
-  box-shadow: 0 0 0 3px rgba(21, 150, 79, 0.18);
-  outline: none;
+  height: 8px;
+  width: 8px;
 }
 
 .save-status {
-  color: var(--muted);
+  color: var(--green-700);
   display: inline-flex;
   flex: 0 1 auto;
   font-size: 12px;

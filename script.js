@@ -91,14 +91,13 @@ const tradeYoyTotals = [
 
 const STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
 const SAVE_DELAY_MS = 450;
-const LIVE_POLL_INTERVAL_MS = 2000;
+const LIVE_POLL_INTERVAL_MS = 5000;
 const SHARED_STATE_ENDPOINT = "/api/dashboard-state";
 
 const tradeRows = document.getElementById("tradeRows");
 const goalInput = document.getElementById("goalInput");
 const mixBars = document.getElementById("mixBars");
 const comparisonChart = document.getElementById("comparisonChart");
-const saveButton = document.getElementById("saveButton");
 const saveStatus = document.getElementById("saveStatus");
 
 let saveTimer = null;
@@ -165,14 +164,16 @@ function isSharedStateNewer(state) {
   const revision = getStateRevision(state);
   const savedAt = getStateTime(state);
 
-  if (revision > latestSharedRevision) return true;
-  if (revision === latestSharedRevision && savedAt > latestSharedSavedAt) return true;
+  if (savedAt > latestSharedSavedAt) return true;
+  if (savedAt === latestSharedSavedAt && revision > latestSharedRevision) return true;
+  if (savedAt === latestSharedSavedAt && revision !== latestSharedRevision) return true;
+  if (!savedAt && revision > latestSharedRevision) return true;
 
   return false;
 }
 
 function rememberSharedState(state) {
-  latestSharedRevision = Math.max(latestSharedRevision, getStateRevision(state));
+  latestSharedRevision = getStateRevision(state);
   latestSharedSavedAt = Math.max(latestSharedSavedAt, getStateTime(state));
 }
 
@@ -205,30 +206,10 @@ function readLocalDashboardState() {
   }
 }
 
-function getFocusedField() {
-  const activeElement = document.activeElement;
-
-  if (activeElement === goalInput) {
-    return { type: "goal" };
-  }
-
-  if (activeElement?.classList?.contains("number-input")) {
-    return {
-      tradeIndex: Number(activeElement.dataset.trade),
-      type: "cell",
-      weekIndex: Number(activeElement.dataset.week),
-    };
-  }
-
-  return null;
-}
-
-function applyDashboardState(state, { skipFocused = false } = {}) {
+function applyDashboardState(state) {
   if (!state || typeof state !== "object") return;
 
-  const focusedField = skipFocused ? getFocusedField() : null;
-
-  if (Number.isFinite(Number(state.goal)) && focusedField?.type !== "goal") {
+  if (Number.isFinite(Number(state.goal))) {
     goalInput.value = cleanNumber(state.goal);
   }
 
@@ -238,28 +219,13 @@ function applyDashboardState(state, { skipFocused = false } = {}) {
 
       if (!Array.isArray(savedTrade?.weeks)) return;
 
-      trade.weeks = trade.weeks.map((value, weekIndex) => {
-        const shouldKeepFocusedCell =
-          focusedField?.type === "cell" &&
-          focusedField.tradeIndex === tradeIndex &&
-          focusedField.weekIndex === weekIndex;
-
-        return shouldKeepFocusedCell ? value : cleanNumber(savedTrade.weeks[weekIndex]);
-      });
+      trade.weeks = trade.weeks.map((_, weekIndex) => cleanNumber(savedTrade.weeks[weekIndex]));
     });
   }
 
   document.querySelectorAll(".number-input").forEach((input) => {
     const tradeIndex = Number(input.dataset.trade);
     const weekIndex = Number(input.dataset.week);
-
-    if (
-      focusedField?.type === "cell" &&
-      focusedField.tradeIndex === tradeIndex &&
-      focusedField.weekIndex === weekIndex
-    ) {
-      return;
-    }
 
     input.value = trades[tradeIndex].weeks[weekIndex] || "";
   });
@@ -696,8 +662,6 @@ goalInput.addEventListener("input", () => {
     value: cleanNumber(goalInput.value),
   });
 });
-
-saveButton.addEventListener("click", () => saveDashboardState({ forceFullSave: true }));
 
 renderRows();
 const localState = loadSavedDashboardState();
