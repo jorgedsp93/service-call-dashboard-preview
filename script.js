@@ -92,7 +92,7 @@ const tradeYoyTotals = [
 const STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
 const CLIENT_ID_KEY = "meadowbrookServiceCallDashboardClient:v1";
 const SAVE_DELAY_MS = 450;
-const LIVE_POLL_INTERVAL_MS = 5000;
+const LIVE_POLL_INTERVAL_MS = 300000;
 const SHARED_STATE_ENDPOINT = "/api/dashboard-state";
 
 const tradeRows = document.getElementById("tradeRows");
@@ -367,6 +367,7 @@ function queueDashboardSave(patch) {
 }
 
 async function refreshSharedDashboardState({ showSyncedStatus = false } = {}) {
+  if (document.hidden) return;
   if (pendingPatchMap.size || saveTimer) return;
 
   try {
@@ -404,6 +405,16 @@ function startLiveUpdates() {
   clearInterval(livePollTimer);
   livePollTimer = window.setInterval(refreshSharedDashboardState, LIVE_POLL_INTERVAL_MS);
 }
+
+document.addEventListener("visibilitychange", () => {
+  if (!document.hidden) {
+    refreshSharedDashboardState({ showSyncedStatus: true });
+  }
+});
+
+window.addEventListener("focus", () => {
+  refreshSharedDashboardState({ showSyncedStatus: true });
+});
 
 function buildDonutGradient(tradeTotals, total) {
   if (total <= 0) return "conic-gradient(#e8ecee 0deg 360deg)";
