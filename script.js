@@ -229,6 +229,56 @@ function getStateRevision(state) {
   return Number.isFinite(Number(state?.revision)) ? Number(state.revision) : 0;
 }
 
+function getStateDiffPatches(candidateState, baseState) {
+  if (!candidateState || typeof candidateState !== "object") return [];
+
+  const patches = [];
+  const candidateGoal = cleanNumber(candidateState.goal);
+  const baseGoal = cleanNumber(baseState?.goal);
+
+  if (candidateGoal !== baseGoal) {
+    patches.push({ type: "goal", value: candidateGoal });
+  }
+
+  trades.forEach((trade) => {
+    const candidateTrade = Array.isArray(candidateState.trades)
+      ? candidateState.trades.find((item) => item?.name === trade.name)
+      : null;
+    const baseTrade = Array.isArray(baseState?.trades)
+      ? baseState.trades.find((item) => item?.name === trade.name)
+      : null;
+
+    for (let weekIndex = 0; weekIndex < 4; weekIndex += 1) {
+      const candidateValue = cleanNumber(candidateTrade?.weeks?.[weekIndex]);
+      const baseValue = cleanNumber(baseTrade?.weeks?.[weekIndex]);
+
+      if (candidateValue !== baseValue) {
+        patches.push({
+          tradeName: trade.name,
+          type: "cell",
+          value: candidateValue,
+          weekIndex,
+        });
+      }
+    }
+  });
+
+  return patches;
+}
+
+function shouldPromoteLocalState(localState, sharedState, patches) {
+  if (!patches.length) return false;
+
+  const localSavedAt = getStateTime(localState);
+  const sharedSavedAt = getStateTime(sharedState);
+
+  if (!localSavedAt) return false;
+  if (!sharedSavedAt) return true;
+  if (localSavedAt > sharedSavedAt) return true;
+
+  return localSavedAt === sharedSavedAt && getStateRevision(localState) > getStateRevision(sharedState);
+}
+
 function isSharedStateNewer(state) {
   const revision = getStateRevision(state);
   const savedAt = getStateTime(state);
@@ -331,6 +381,10 @@ async function loadSharedDashboardState(localState) {
     const sharedState = payload.state;
 
     if (sharedState) {
+      if (await promoteLocalStateIfNewer(localState, sharedState)) {
+        return;
+      }
+
       applyDashboardState(sharedState);
       writeLocalDashboardState(sharedState);
       rememberSharedState(sharedState);
@@ -357,6 +411,66 @@ function queuePatch(patch) {
   pendingPatchMap.set(getPatchKey(patch), patch);
 }
 
+async function postSharedDashboardState(patches, state) {
+  const body = patches.length
+    ? { clientId: dashboardClientId, patches, periodKey: currentPeriod.key, state }
+    : { clientId: dashboardClientId, force: true, periodKey: currentPeriod.key, state };
+
+  const response = await fetch(getSharedStateUrl(), {
+    method: "POST",
+    headers: { "Content-Type": "application/json" },
+    body: JSON.stringify(body),
+  });
+
+  if (!response.ok) {
+    const errorPayload = await response.json().catch(() => null);
+    const error = new Error("Shared save failed.");
+    error.status = response.status;
+    error.payload = errorPayload;
+    throw error;
+  }
+
+  return response.json();
+}
+
+function applySavedSharedState(savedState) {
+  pendingPatchMap.clear();
+  applyDashboardState(savedState);
+  writeLocalDashboardState(savedState);
+  rememberSharedState(savedState);
+}
+
+async function promoteLocalStateIfNewer(localState, sharedState) {
+  const patches = getStateDiffPatches(localState, sharedState);
+
+  if (!shouldPromoteLocalState(localState, sharedState, patches)) return false;
+
+  applyDashboardState(localState);
+  setSaveStatus("Uploading this device's latest numbers...", "saving");
+
+  try {
+    const state = {
+      ...localState,
+      periodKey: currentPeriod.key,
+    };
+    const payload = await postSharedDashboardState(patches, state);
+    const savedState = payload.state || state;
+
+    applySavedSharedState(savedState);
+    setSaveStatus(`Restored for everyone ${formatSavedAt(savedState.savedAt)}`);
+  } catch (error) {
+    if (error.status === 409 && error.payload?.state) {
+      applySavedSharedState(error.payload.state);
+      setSaveStatus("Shared save has newer edits", "warning");
+      return true;
+    }
+
+    setSaveStatus(`Saved here only ${formatSavedAt(localState.savedAt)}`, "warning");
+  }
+
+  return true;
+}
+
 async function saveDashboardState({ forceFullSave = false } = {}) {
   clearTimeout(saveTimer);
   saveTimer = null;
@@ -374,40 +488,18 @@ async function saveDashboardState({ forceFullSave = false } = {}) {
   setSaveStatus("Saving shared...", "saving");
 
   try {
-    const body = patches.length
-      ? { clientId: dashboardClientId, patches, periodKey: currentPeriod.key, state }
-      : { clientId: dashboardClientId, force: true, periodKey: currentPeriod.key, state };
-
-    const response = await fetch(getSharedStateUrl(), {
-      method: "POST",
-      headers: { "Content-Type": "application/json" },
-      body: JSON.stringify(body),
-    });
-
-    if (!response.ok) {
-      const errorPayload = await response.json().catch(() => null);
-
-      if (response.status === 409 && errorPayload?.state) {
-        const savedState = errorPayload.state;
-        pendingPatchMap.clear();
-        applyDashboardState(savedState);
-        writeLocalDashboardState(savedState);
-        rememberSharedState(savedState);
-        setSaveStatus("Recent edit locked this field", "warning");
-        return;
-      }
-
-      throw new Error("Shared save failed.");
-    }
-
-    const payload = await response.json();
+    const payload = await postSharedDashboardState(patches, state);
     const savedState = payload.state || state;
-    pendingPatchMap.clear();
-    applyDashboardState(savedState);
-    writeLocalDashboardState(savedState);
-    rememberSharedState(savedState);
+
+    applySavedSharedState(savedState);
     setSaveStatus(`Saved for everyone ${formatSavedAt(savedState.savedAt)}`);
   } catch (error) {
+    if (error.status === 409 && error.payload?.state) {
+      applySavedSharedState(error.payload.state);
+      setSaveStatus("Recent edit locked this field", "warning");
+      return;
+    }
+
     setSaveStatus(`Saved here only ${formatSavedAt(state.savedAt)}`, "warning");
   }
 }
