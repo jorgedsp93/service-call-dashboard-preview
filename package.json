@@ -3,7 +3,10 @@
   "version": "1.0.0",
   "private": true,
   "type": "module",
+  "scripts": {
+    "start": "node server.js"
+  },
   "dependencies": {
-    "@vercel/blob": "^2.5.0"
+    "@google-cloud/firestore": "^8.6.0"
   }
 }

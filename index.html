@@ -3,15 +3,15 @@
   <head>
     <meta charset="UTF-8" />
     <meta name="viewport" content="width=device-width, initial-scale=1.0" />
-    <title>Service Call Dashboard</title>
+    <title>Service Dashboard</title>
     <link rel="stylesheet" href="styles.css" />
   </head>
   <body>
     <main class="sheet-preview">
-      <section class="dashboard-card" aria-label="Service call dashboard">
+      <section class="dashboard-card" aria-label="Service dashboard">
         <header class="hero">
           <div class="hero-title">
-            <h1 id="dashboardTitle">Service Call Dashboard</h1>
+            <h1 id="dashboardTitle">Service Dashboard</h1>
           </div>
           <img class="brand-logo" src="assets/meadowbrook-logo.png" alt="MeadowBrook" />
         </header>
@@ -26,7 +26,7 @@
               </svg>
             </div>
             <label class="summary-copy" for="goalInput">
-              <span>Service Call Goal</span>
+              <span>Service Goal</span>
               <input
                 id="goalInput"
                 class="goal-input"
@@ -65,26 +65,28 @@
 
         <section class="content-grid" aria-label="Dashboard details">
           <div class="left-stack">
-            <section class="table-card" aria-label="Weekly service calls by trade">
+            <section class="table-card" aria-label="Weekly service totals by trade">
               <table>
                 <thead>
-                  <tr>
+                  <tr id="weeklyHeader">
                     <th scope="col">Trade</th>
                     <th scope="col">Week 1</th>
                     <th scope="col">Week 2</th>
                     <th scope="col">Week 3</th>
                     <th scope="col">Week 4</th>
-                    <th scope="col">Total Per Trade</th>
+                    <th scope="col">Week 5</th>
+                    <th scope="col">Total</th>
                   </tr>
                 </thead>
                 <tbody id="tradeRows"></tbody>
                 <tfoot>
-                  <tr>
-                    <th scope="row">Estimated Week Total</th>
+                  <tr id="weeklyFooter">
+                    <th scope="row">Week Total</th>
                     <td id="weekTotal0">57</td>
                     <td id="weekTotal1">0</td>
                     <td id="weekTotal2">0</td>
                     <td id="weekTotal3">0</td>
+                    <td id="weekTotal4">0</td>
                     <td id="monthTotal">57</td>
                   </tr>
                 </tfoot>
@@ -110,7 +112,6 @@
             <div class="mix-visual">
               <div id="mixDonut" class="mix-donut" role="img" aria-label="Trade call mix chart">
                 <div class="donut-center">
-                  <span>Top Trade</span>
                   <strong id="topTradeName">Plumbing</strong>
                   <small id="topTradeShare">56%</small>
                 </div>
@@ -122,18 +123,18 @@
                   <h2>Trade Call Mix</h2>
                   <p id="mixSubtitle">Current share plus monthly YoY</p>
                 </div>
-                <strong id="leaderBadge">Plumbing leads by 15 calls</strong>
+                <strong id="leaderBadge">Plumbing leads by 15</strong>
               </div>
               <div id="mixBars" class="mix-bars"></div>
             </div>
           </aside>
 
-          <section class="comparison-card" aria-label="Prior year service call comparison">
+          <section class="comparison-card" aria-label="Prior year service comparison">
             <div
               id="comparisonChart"
               class="comparison-chart"
               role="img"
-              aria-label="Monthly service calls comparison chart"
+              aria-label="Monthly service totals comparison chart"
             ></div>
           </section>
         </section>
