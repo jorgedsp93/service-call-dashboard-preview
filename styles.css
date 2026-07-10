@@ -286,12 +286,13 @@ svg {
 .table-card {
   max-width: 100%;
   min-width: 0;
-  overflow-x: auto;
+  overflow-x: hidden;
 }
 
 table {
   border-collapse: collapse;
-  min-width: 880px;
+  min-width: 0;
+  table-layout: fixed;
   width: 100%;
 }
 
@@ -302,7 +303,7 @@ thead th {
   font-size: 16px;
   font-weight: 850;
   height: 46px;
-  padding: 0 20px;
+  padding: 0 8px;
   text-transform: uppercase;
 }
 
@@ -311,9 +312,21 @@ td {
   border-bottom: 1px solid var(--row-line);
   font-size: 18px;
   height: 45px;
-  padding: 0 20px;
+  padding: 0 8px;
   text-align: center;
   white-space: nowrap;
+}
+
+thead th:first-child,
+tbody th,
+tfoot th {
+  width: 26%;
+}
+
+thead th:last-child,
+tbody td:last-child,
+tfoot td:last-child {
+  width: 12%;
 }
 
 th:first-child,
@@ -324,7 +337,9 @@ td:first-child {
 .trade-name {
   align-items: center;
   display: inline-flex;
-  gap: 12px;
+  gap: 10px;
+  max-width: 100%;
+  min-width: 0;
 }
 
 .trade-icon {
@@ -351,9 +366,9 @@ td:first-child {
   font-size: 18px;
   height: 32px;
   line-height: 1;
-  padding: 0 8px;
+  padding: 0 4px;
   text-align: center;
-  width: 66px;
+  width: min(54px, 100%);
 }
 
 .number-input::placeholder {

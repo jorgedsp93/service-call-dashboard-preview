@@ -1,14 +1,18 @@
 const LEGACY_PERIOD_KEY = "2026-07";
+const DEFAULT_WEEK_COUNT = 4;
+const WEEK_COUNTS_BY_PERIOD = {
+  "2026-07": 5,
+};
 const currentPeriod = getDashboardPeriod(new Date());
 
 const trades = [
-  { name: "HVAC", icon: "hvac", color: "#167a74", weeks: getInitialWeeks([17, 0, 0, 0]) },
-  { name: "Plumbing", icon: "plumbing", color: "#7c5fb5", weeks: getInitialWeeks([32, 0, 0, 0]) },
-  { name: "Electrical", icon: "electrical", color: "#df6b57", weeks: getInitialWeeks([2, 0, 0, 0]) },
-  { name: "Handyman", icon: "handyman", color: "#3978c6", weeks: getInitialWeeks([4, 0, 0, 0]) },
-  { name: "Subtrade", icon: "subtrade", color: "#d99a2b", weeks: getInitialWeeks([1, 0, 0, 0]) },
-  { name: "Door & Dock", icon: "dock", color: "#2e9d63", weeks: getInitialWeeks([1, 0, 0, 0]) },
-  { name: "Multi-trade", icon: "multi", color: "#667085", weeks: getInitialWeeks([0, 0, 0, 0]) },
+  { name: "HVAC", icon: "hvac", color: "#167a74", weeks: getInitialWeeks([17, 0, 0, 0, 0]) },
+  { name: "Plumbing", icon: "plumbing", color: "#7c5fb5", weeks: getInitialWeeks([32, 0, 0, 0, 0]) },
+  { name: "Electrical", icon: "electrical", color: "#df6b57", weeks: getInitialWeeks([2, 0, 0, 0, 0]) },
+  { name: "Handyman", icon: "handyman", color: "#3978c6", weeks: getInitialWeeks([4, 0, 0, 0, 0]) },
+  { name: "Subtrade", icon: "subtrade", color: "#d99a2b", weeks: getInitialWeeks([1, 0, 0, 0, 0]) },
+  { name: "Door & Dock", icon: "dock", color: "#2e9d63", weeks: getInitialWeeks([1, 0, 0, 0, 0]) },
+  { name: "Multi-trade", icon: "multi", color: "#667085", weeks: getInitialWeeks([0, 0, 0, 0, 0]) },
 ];
 
 const historicalServiceCalls = [
@@ -16,14 +20,14 @@ const historicalServiceCalls = [
     fiscalYear: "FY 2025/26",
     fiscalTotal: 2339,
     july: {
-      total: 213,
+      total: 350,
       trades: {
-        HVAC: 62,
-        Plumbing: 85,
-        Electrical: 36,
-        Handyman: 23,
-        Subtrade: 6,
-        "Multi-trade": 1,
+        HVAC: 91,
+        Plumbing: 143,
+        Electrical: 56,
+        Handyman: 40,
+        Subtrade: 15,
+        "Multi-trade": 5,
       },
     },
   },
@@ -96,7 +100,7 @@ const LEGACY_STORAGE_KEY = "meadowbrookServiceCallDashboard:v1";
 const STORAGE_KEY = `${LEGACY_STORAGE_KEY}:${currentPeriod.key}`;
 const CLIENT_ID_KEY = "meadowbrookServiceCallDashboardClient:v1";
 const SAVE_DELAY_MS = 450;
-const LIVE_POLL_INTERVAL_MS = 300000;
+const LIVE_POLL_INTERVAL_MS = 15000;
 const SHARED_STATE_ENDPOINT = "/api/dashboard-state";
 
 const tradeRows = document.getElementById("tradeRows");
@@ -130,18 +134,32 @@ function getDashboardPeriod(date) {
   const monthIndex = date.getMonth();
   const monthNumber = String(monthIndex + 1).padStart(2, "0");
   const monthName = date.toLocaleString("en-US", { month: "long" });
+  const key = `${year}-${monthNumber}`;
 
   return {
     dataKey: monthName.toLowerCase(),
-    key: `${year}-${monthNumber}`,
+    key,
     monthName,
     monthShort: date.toLocaleString("en-US", { month: "short" }),
+    weekCount: getWeekCount(key),
     year,
   };
 }
 
+function getWeekCount(periodKey) {
+  return WEEK_COUNTS_BY_PERIOD[periodKey] || DEFAULT_WEEK_COUNT;
+}
+
+function getWeekIndexes() {
+  return Array.from({ length: currentPeriod.weekCount }, (_, index) => index);
+}
+
+function normalizeWeeks(weeks) {
+  return getWeekIndexes().map((weekIndex) => cleanNumber(weeks?.[weekIndex]));
+}
+
 function getInitialWeeks(defaultWeeks) {
-  return currentPeriod.key === LEGACY_PERIOD_KEY ? [...defaultWeeks] : [0, 0, 0, 0];
+  return currentPeriod.key === LEGACY_PERIOD_KEY ? normalizeWeeks(defaultWeeks) : normalizeWeeks([]);
 }
 
 function getSharedStateUrl() {
@@ -149,12 +167,12 @@ function getSharedStateUrl() {
 }
 
 function updatePeriodLabels() {
-  const title = `${currentPeriod.monthName} Service Call Dashboard`;
+  const title = `${currentPeriod.monthName} Service Dashboard`;
   document.title = title;
   dashboardTitle.textContent = title;
-  document.querySelector(".dashboard-card").setAttribute("aria-label", `${currentPeriod.monthName} service call dashboard`);
+  document.querySelector(".dashboard-card").setAttribute("aria-label", `${currentPeriod.monthName} service dashboard`);
   mixSubtitle.textContent = `Current share plus ${currentPeriod.monthName} YoY`;
-  comparisonChart.setAttribute("aria-label", `${currentPeriod.monthName} service calls comparison chart`);
+  comparisonChart.setAttribute("aria-label", `${currentPeriod.monthName} service totals comparison chart`);
 }
 
 function setLastUpdated(value) {
@@ -248,7 +266,7 @@ function getStateDiffPatches(candidateState, baseState) {
       ? baseState.trades.find((item) => item?.name === trade.name)
       : null;
 
-    for (let weekIndex = 0; weekIndex < 4; weekIndex += 1) {
+    getWeekIndexes().forEach((weekIndex) => {
       const candidateValue = cleanNumber(candidateTrade?.weeks?.[weekIndex]);
       const baseValue = cleanNumber(baseTrade?.weeks?.[weekIndex]);
 
@@ -260,7 +278,7 @@ function getStateDiffPatches(candidateState, baseState) {
           weekIndex,
         });
       }
-    }
+    });
   });
 
   return patches;
@@ -277,6 +295,26 @@ function shouldPromoteLocalState(localState, sharedState, patches) {
   if (localSavedAt > sharedSavedAt) return true;
 
   return localSavedAt === sharedSavedAt && getStateRevision(localState) > getStateRevision(sharedState);
+}
+
+function getStatePatchValue(state, patch) {
+  if (patch.type === "goal") {
+    return cleanNumber(state?.goal);
+  }
+
+  const trade = Array.isArray(state?.trades)
+    ? state.trades.find((item) => item?.name === patch.tradeName)
+    : null;
+
+  return cleanNumber(trade?.weeks?.[patch.weekIndex]);
+}
+
+function getRecoverableLocalPatches(patches, localState, sharedState) {
+  return patches.filter((patch) => (
+    patch.type === "cell"
+    && getStatePatchValue(localState, patch) > 0
+    && getStatePatchValue(sharedState, patch) === 0
+  ));
 }
 
 function isSharedStateNewer(state) {
@@ -341,7 +379,7 @@ function applyDashboardState(state) {
 
       if (!Array.isArray(savedTrade?.weeks)) return;
 
-      trade.weeks = trade.weeks.map((_, weekIndex) => cleanNumber(savedTrade.weeks[weekIndex]));
+      trade.weeks = normalizeWeeks(savedTrade.weeks);
     });
   }
 
@@ -442,10 +480,17 @@ function applySavedSharedState(savedState) {
 
 async function promoteLocalStateIfNewer(localState, sharedState) {
   const patches = getStateDiffPatches(localState, sharedState);
+  const shouldPromote = shouldPromoteLocalState(localState, sharedState, patches);
+  const patchesToPromote = shouldPromote
+    ? patches
+    : getRecoverableLocalPatches(patches, localState, sharedState);
 
-  if (!shouldPromoteLocalState(localState, sharedState, patches)) return false;
+  if (!patchesToPromote.length) return false;
 
-  applyDashboardState(localState);
+  if (shouldPromote) {
+    applyDashboardState(localState);
+  }
+
   setSaveStatus("Uploading this device's latest numbers...", "saving");
 
   try {
@@ -453,7 +498,7 @@ async function promoteLocalStateIfNewer(localState, sharedState) {
       ...localState,
       periodKey: currentPeriod.key,
     };
-    const payload = await postSharedDashboardState(patches, state);
+    const payload = await postSharedDashboardState(patchesToPromote, state);
     const savedState = payload.state || state;
 
     applySavedSharedState(savedState);
@@ -633,8 +678,30 @@ function renderRows() {
   });
 }
 
+function renderWeekStructure() {
+  const headerRow = document.getElementById("weeklyHeader");
+  const footerRow = document.getElementById("weeklyFooter");
+  const weekHeaders = getWeekIndexes()
+    .map((weekIndex) => `<th scope="col">Week ${weekIndex + 1}</th>`)
+    .join("");
+  const weekTotals = getWeekIndexes()
+    .map((weekIndex) => `<td id="weekTotal${weekIndex}">0</td>`)
+    .join("");
+
+  headerRow.innerHTML = `
+    <th scope="col">Trade</th>
+    ${weekHeaders}
+    <th scope="col">Total</th>
+  `;
+  footerRow.innerHTML = `
+    <th scope="row">Week Total</th>
+    ${weekTotals}
+    <td id="monthTotal">0</td>
+  `;
+}
+
 function updateTotals() {
-  const weekTotals = [0, 0, 0, 0];
+  const weekTotals = getWeekIndexes().map(() => 0);
   let total = 0;
   const goal = cleanNumber(goalInput.value);
 
@@ -676,10 +743,10 @@ function updateTradeMix(total) {
   const maxTradeTotal = Math.max(leader?.total || 0, 1);
 
   document.getElementById("mixDonut").style.background = buildDonutGradient(tradeTotals, total);
-  document.getElementById("topTradeName").textContent = total > 0 ? leader.name : "No calls";
+  document.getElementById("topTradeName").textContent = total > 0 ? leader.name : "No entries";
   document.getElementById("topTradeShare").textContent = formatPercent(leaderShare);
   document.getElementById("leaderBadge").textContent =
-    total > 0 ? `${leader.name} leads by ${leaderGap} calls` : "No calls entered";
+    total > 0 ? `${leader.name} leads by ${leaderGap}` : "No entries yet";
 
   mixBars.innerHTML = sortedTrades
     .map((trade) => {
@@ -701,7 +768,7 @@ function updateTradeMix(total) {
             <div class="mix-yoy">
               ${
                 yoy
-                  ? `<span class="yoy-year is-prior-year">Last ${currentPeriod.monthName}: <b>${lastMonthTotal} calls</b></span>`
+                  ? `<span class="yoy-year is-prior-year">Last ${currentPeriod.monthName}: <b>${lastMonthTotal}</b></span>`
                   : `<span class="yoy-year is-prior-year">No LY target</span>`
               }
             </div>
@@ -718,13 +785,14 @@ function updateTradeMix(total) {
 
 function updateHistoricalComparison(total, weekTotals) {
   const goal = cleanNumber(goalInput.value);
-  const goalWeekly = Math.round(goal / 4);
+  const weekCount = currentPeriod.weekCount;
+  const goalWeekly = Math.round(goal / weekCount);
   const historicalMonthRecords = historicalServiceCalls.map((item) => item[currentPeriod.dataKey]).filter(Boolean);
   const hasHistory = historicalMonthRecords.length > 0;
   const lastYearTotal = hasHistory ? historicalMonthRecords[0].total : 0;
-  const lastYearWeekly = hasHistory ? Math.round(lastYearTotal / 4) : 0;
+  const lastYearWeekly = hasHistory ? Math.round(lastYearTotal / weekCount) : 0;
   const fiveYearWeekly = hasHistory
-    ? Math.round(historicalMonthRecords.reduce((sum, item) => sum + item.total, 0) / historicalMonthRecords.length / 4)
+    ? Math.round(historicalMonthRecords.reduce((sum, item) => sum + item.total, 0) / historicalMonthRecords.length / weekCount)
     : 0;
   const latestWeekIndex = Math.max(weekTotals.findLastIndex((value) => value > 0), 0);
   const latestWeekTotal = weekTotals[latestWeekIndex] || 0;
@@ -752,8 +820,10 @@ function renderWeeklyComparisonChart(weekTotals, references) {
     : [references.goalWeekly];
   const maxValue = Math.ceil(Math.max(10, ...referenceValues, ...weekTotals) * 1.12 / 10) * 10;
   const ticks = [0, Math.round(maxValue / 2), maxValue];
-  const barWidth = 48;
-  const gap = (chartWidth - barWidth * weekTotals.length) / (weekTotals.length - 1);
+  const barWidth = Math.min(48, chartWidth / weekTotals.length * 0.62);
+  const gap = weekTotals.length > 1
+    ? (chartWidth - barWidth * weekTotals.length) / (weekTotals.length - 1)
+    : 0;
   const yFor = (value) => margin.top + chartHeight - (value / maxValue) * chartHeight;
   const baseline = margin.top + chartHeight;
   const lastYearY = yFor(references.lastYearWeekly);
@@ -806,8 +876,8 @@ function renderWeeklyComparisonChart(weekTotals, references) {
   comparisonChart.setAttribute(
     "aria-label",
     references.hasHistory
-      ? `Weekly ${references.monthName} service calls chart. Current entered weeks total ${references.total}. Last ${references.monthName} averaged ${references.lastYearWeekly} calls per week, five year average is ${references.fiveYearWeekly} per week, and the goal pace is ${references.goalWeekly} per week.`
-      : `Weekly ${references.monthName} service calls chart. Current entered weeks total ${references.total}. No prior ${references.monthName} history is loaded, and the goal pace is ${references.goalWeekly} per week.`,
+      ? `Weekly ${references.monthName} service totals chart. Current entered weeks total ${references.total}. Last ${references.monthName} averaged ${references.lastYearWeekly} per week, five year average is ${references.fiveYearWeekly} per week, and the goal pace is ${references.goalWeekly} per week.`
+      : `Weekly ${references.monthName} service totals chart. Current entered weeks total ${references.total}. No prior ${references.monthName} history is loaded, and the goal pace is ${references.goalWeekly} per week.`,
   );
 
   const lastYearMarkup = references.hasHistory
@@ -869,6 +939,7 @@ goalInput.addEventListener("input", () => {
 });
 
 updatePeriodLabels();
+renderWeekStructure();
 renderRows();
 const localState = loadSavedDashboardState();
 updateTotals();

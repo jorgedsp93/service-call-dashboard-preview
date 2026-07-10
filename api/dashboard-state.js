@@ -1,22 +1,28 @@
-import { del, list, put } from "@vercel/blob";
+import { Firestore } from "@google-cloud/firestore";
 
 const LEGACY_PERIOD_KEY = "2026-07";
-const LEGACY_FIELD_PREFIX = "dashboard-state/live-fields";
-const LEGACY_LOCK_PREFIX = "dashboard-state/live-locks";
-const MONTHLY_PREFIX = "dashboard-state/monthly";
 const FIELD_LOCK_MS = 10000;
+const DEFAULT_PROJECT_ID = "polarpath-fsm";
+const DEFAULT_DATABASE_ID = "service-call-dashboard";
+const PERIOD_COLLECTION = "dashboard_periods";
+const DEFAULT_WEEK_COUNT = 4;
+const WEEK_COUNTS_BY_PERIOD = {
+  "2026-07": 5,
+};
 
 const DEFAULT_TRADES = [
-  { id: "hvac", name: "HVAC", weeks: [17, 0, 0, 0] },
-  { id: "plumbing", name: "Plumbing", weeks: [32, 0, 0, 0] },
-  { id: "electrical", name: "Electrical", weeks: [2, 0, 0, 0] },
-  { id: "handyman", name: "Handyman", weeks: [4, 0, 0, 0] },
-  { id: "subtrade", name: "Subtrade", weeks: [1, 0, 0, 0] },
-  { id: "door-dock", name: "Door & Dock", weeks: [1, 0, 0, 0] },
-  { id: "multi-trade", name: "Multi-trade", weeks: [0, 0, 0, 0] },
+  { id: "hvac", name: "HVAC", weeks: [17, 0, 0, 0, 0] },
+  { id: "plumbing", name: "Plumbing", weeks: [32, 0, 0, 0, 0] },
+  { id: "electrical", name: "Electrical", weeks: [2, 0, 0, 0, 0] },
+  { id: "handyman", name: "Handyman", weeks: [4, 0, 0, 0, 0] },
+  { id: "subtrade", name: "Subtrade", weeks: [1, 0, 0, 0, 0] },
+  { id: "door-dock", name: "Door & Dock", weeks: [1, 0, 0, 0, 0] },
+  { id: "multi-trade", name: "Multi-trade", weeks: [0, 0, 0, 0, 0] },
 ];
 
 const TRADE_NAMES = new Set(DEFAULT_TRADES.map((trade) => trade.name));
+
+let firestoreClient = null;
 
 class FieldLockError extends Error {
   constructor(patch, lock, state) {
@@ -44,12 +50,6 @@ function normalizeClientId(value) {
   return typeof value === "string" ? value.slice(0, 120) : "";
 }
 
-function wait(milliseconds) {
-  return new Promise((resolve) => {
-    setTimeout(resolve, milliseconds);
-  });
-}
-
 function getCurrentPeriodKey() {
   return new Date().toISOString().slice(0, 7);
 }
@@ -58,16 +58,21 @@ function normalizePeriodKey(value) {
   return /^\d{4}-(0[1-9]|1[0-2])$/.test(value || "") ? value : getCurrentPeriodKey();
 }
 
-function getFieldPrefix(periodKey) {
-  return periodKey === LEGACY_PERIOD_KEY ? LEGACY_FIELD_PREFIX : `${MONTHLY_PREFIX}/${periodKey}/live-fields`;
+function getWeekCount(periodKey) {
+  return WEEK_COUNTS_BY_PERIOD[periodKey] || DEFAULT_WEEK_COUNT;
 }
 
-function getLockPrefix(periodKey) {
-  return periodKey === LEGACY_PERIOD_KEY ? LEGACY_LOCK_PREFIX : `${MONTHLY_PREFIX}/${periodKey}/live-locks`;
+function normalizeWeeks(weeks, periodKey) {
+  return Array.from(
+    { length: getWeekCount(periodKey) },
+    (_, index) => cleanNumber(weeks?.[index]),
+  );
 }
 
 function getDefaultWeeks(defaultWeeks, periodKey) {
-  return periodKey === LEGACY_PERIOD_KEY ? defaultWeeks : [0, 0, 0, 0];
+  return periodKey === LEGACY_PERIOD_KEY
+    ? normalizeWeeks(defaultWeeks, periodKey)
+    : normalizeWeeks([], periodKey);
 }
 
 function createDefaultState(periodKey = getCurrentPeriodKey()) {
@@ -97,17 +102,14 @@ function normalizeState(input, periodKey = getCurrentPeriodKey()) {
     goal: Number.isFinite(Number(input.goal)) ? cleanNumber(input.goal) : base.goal,
     periodKey,
     revision: cleanNumber(input.revision),
-    savedAt: input.savedAt || "",
+    savedAt: typeof input.savedAt === "string" ? input.savedAt : "",
     savedBy: typeof input.savedBy === "string" ? input.savedBy.slice(0, 80) : "",
     trades: DEFAULT_TRADES.map((defaultTrade) => {
       const trade = inputTrades.find((item) => item?.name === defaultTrade.name);
 
       return {
         name: defaultTrade.name,
-        weeks: Array.from(
-          { length: 4 },
-          (_, index) => cleanNumber(trade?.weeks?.[index] ?? defaultTrade.weeks[index]),
-        ),
+        weeks: normalizeWeeks(trade?.weeks || defaultTrade.weeks, periodKey),
       };
     }),
   };
@@ -117,71 +119,33 @@ function getTradeId(tradeName) {
   return DEFAULT_TRADES.find((trade) => trade.name === tradeName)?.id || "";
 }
 
-function getFieldBase(patch, periodKey) {
+function assertValidWeekIndex(weekIndex, periodKey) {
+  if (!Number.isInteger(weekIndex) || weekIndex < 0 || weekIndex >= getWeekCount(periodKey)) {
+    throw new Error("Invalid dashboard cell patch.");
+  }
+}
+
+function getFieldKey(patch, periodKey) {
   if (patch.type === "goal") {
-    return `${getFieldPrefix(periodKey)}/goal`;
+    return "goal";
   }
 
   if (patch.type === "cell") {
     const tradeId = getTradeId(patch.tradeName);
     const weekIndex = Number(patch.weekIndex);
 
-    if (!tradeId || !Number.isInteger(weekIndex) || weekIndex < 0 || weekIndex > 3) {
+    if (!tradeId) {
       throw new Error("Invalid dashboard cell patch.");
     }
 
-    return `${getFieldPrefix(periodKey)}/${tradeId}/week-${weekIndex}`;
+    assertValidWeekIndex(weekIndex, periodKey);
+    return `${tradeId}_week_${weekIndex}`;
   }
 
   throw new Error("Unsupported dashboard patch.");
 }
 
-function getFieldPath(patch, revision, periodKey) {
-  const suffix = Math.random().toString(36).slice(2, 8);
-  return `${getFieldBase(patch, periodKey)}/${revision}-${suffix}.json`;
-}
-
-function getFieldLockPath(patch, periodKey) {
-  return `${getFieldBase(patch, periodKey).replace(getFieldPrefix(periodKey), getLockPrefix(periodKey))}.json`;
-}
-
-function parseFieldPath(pathname, periodKey) {
-  const fieldPrefix = getFieldPrefix(periodKey);
-
-  if (!pathname.startsWith(`${fieldPrefix}/`)) return null;
-
-  const relativePath = pathname.replace(`${fieldPrefix}/`, "");
-  const goalMatch = relativePath.match(/^goal\/(\d+)-[a-z0-9]+\.json$/);
-
-  if (goalMatch) {
-    return {
-      revision: Number(goalMatch[1]),
-      type: "goal",
-    };
-  }
-
-  const cellMatch = relativePath.match(/^([^/]+)\/week-([0-3])\/(\d+)-[a-z0-9]+\.json$/);
-
-  if (!cellMatch) return null;
-
-  const trade = DEFAULT_TRADES.find((item) => item.id === cellMatch[1]);
-
-  if (!trade) return null;
-
-  return {
-    revision: Number(cellMatch[3]),
-    tradeName: trade.name,
-    type: "cell",
-    weekIndex: Number(cellMatch[2]),
-  };
-}
-
-function getParsedFieldKey(parsedField) {
-  if (parsedField.type === "goal") return "goal";
-  return `${parsedField.tradeName}:${parsedField.weekIndex}`;
-}
-
-function normalizePatch(patch) {
+function normalizePatch(patch, periodKey) {
   if (!patch || typeof patch !== "object") {
     throw new Error("Missing dashboard patch.");
   }
@@ -196,10 +160,11 @@ function normalizePatch(patch) {
   if (patch.type === "cell") {
     const weekIndex = Number(patch.weekIndex);
 
-    if (!TRADE_NAMES.has(patch.tradeName) || !Number.isInteger(weekIndex) || weekIndex < 0 || weekIndex > 3) {
+    if (!TRADE_NAMES.has(patch.tradeName)) {
       throw new Error("Invalid dashboard cell patch.");
     }
 
+    assertValidWeekIndex(weekIndex, periodKey);
     return {
       tradeName: patch.tradeName,
       type: "cell",
@@ -268,124 +233,64 @@ function getRequestPeriodKey(request) {
   }
 }
 
-async function readPrivateJsonBlob(blob) {
-  const response = await fetch(blob.url, {
-    headers: {
-      Authorization: `Bearer ${process.env.BLOB_READ_WRITE_TOKEN}`,
-    },
+function parseServiceAccountJson() {
+  const raw = process.env.GOOGLE_SERVICE_ACCOUNT_JSON;
+
+  if (!raw) {
+    return null;
+  }
+
+  const credentials = JSON.parse(raw);
+
+  if (typeof credentials.private_key === "string") {
+    credentials.private_key = credentials.private_key.replace(/\\n/g, "\n");
+  }
+
+  return credentials;
+}
+
+function getProjectId(credentials) {
+  return (
+    process.env.GOOGLE_CLOUD_PROJECT ||
+    process.env.GCP_PROJECT_ID ||
+    process.env.GCP_PROJECT ||
+    credentials?.project_id ||
+    DEFAULT_PROJECT_ID
+  );
+}
+
+function getFirestore() {
+  if (firestoreClient) {
+    return firestoreClient;
+  }
+
+  const credentials = parseServiceAccountJson();
+  const projectId = getProjectId(credentials);
+  const databaseId = process.env.GOOGLE_FIRESTORE_DATABASE_ID || process.env.FIRESTORE_DATABASE_ID || DEFAULT_DATABASE_ID;
+
+  firestoreClient = new Firestore({
+    projectId,
+    databaseId,
+    ...(credentials ? { credentials } : {}),
   });
 
-  return response.ok ? response.json() : null;
+  return firestoreClient;
 }
 
-function rememberField(state, record) {
-  if (!record) return;
-
-  if (record.type === "goal") {
-    state.goal = cleanNumber(record.value);
-  }
-
-  if (record.type === "cell") {
-    const trade = state.trades.find((item) => item.name === record.tradeName);
-    const weekIndex = Number(record.weekIndex);
-
-    if (trade && Number.isInteger(weekIndex) && weekIndex >= 0 && weekIndex <= 3) {
-      trade.weeks[weekIndex] = cleanNumber(record.value);
-    }
-  }
-
-  state.revision += cleanNumber(record.revision);
-
-  if (Date.parse(record.savedAt || "") > (Date.parse(state.savedAt || "") || 0)) {
-    state.savedAt = record.savedAt;
-    state.savedBy = typeof record.savedBy === "string" ? record.savedBy : "";
-  }
+function getPeriodRef(periodKey) {
+  return getFirestore().collection(PERIOD_COLLECTION).doc(periodKey);
 }
 
-async function readDashboardState(periodKey) {
-  const state = createDefaultState(periodKey);
-  const latestFields = new Map();
-  let cursor;
-
-  do {
-    const result = await list({
-      cursor,
-      limit: 1000,
-      prefix: `${getFieldPrefix(periodKey)}/`,
-    });
-
-    result.blobs.forEach((blob) => {
-      const parsedField = parseFieldPath(blob.pathname, periodKey);
-
-      if (!parsedField) return;
-
-      const key = getParsedFieldKey(parsedField);
-      const current = latestFields.get(key);
-
-      if (!current || parsedField.revision > current.parsedField.revision) {
-        latestFields.set(key, { blob, parsedField });
-      }
-    });
-
-    cursor = result.hasMore ? result.cursor : undefined;
-  } while (cursor);
-
-  await Promise.all(
-    [...latestFields.values()].map(async ({ blob }) => {
-      rememberField(state, await readPrivateJsonBlob(blob));
-    }),
-  );
-
-  return state;
+function normalizeFields(input) {
+  return input && typeof input === "object" && !Array.isArray(input) ? input : {};
 }
 
-async function readLatestFieldRecord(patch, periodKey) {
-  let latestBlob = null;
-  let latestParsedField = null;
-  let cursor;
-
-  do {
-    const result = await list({
-      cursor,
-      limit: 1000,
-      prefix: `${getFieldBase(patch, periodKey)}/`,
-    });
-
-    result.blobs.forEach((blob) => {
-      const parsedField = parseFieldPath(blob.pathname, periodKey);
-
-      if (!parsedField) return;
-
-      if (!latestParsedField || parsedField.revision > latestParsedField.revision) {
-        latestBlob = blob;
-        latestParsedField = parsedField;
-      }
-    });
-
-    cursor = result.hasMore ? result.cursor : undefined;
-  } while (cursor);
-
-  return latestBlob ? readPrivateJsonBlob(latestBlob) : null;
-}
-
-async function readFieldLock(lockPath) {
-  for (let attempt = 0; attempt < 3; attempt += 1) {
-    const result = await list({
-      limit: 10,
-      prefix: lockPath,
-    });
-    const lockBlob = result.blobs.find((blob) => blob.pathname === lockPath);
-
-    if (lockBlob) {
-      return readPrivateJsonBlob(lockBlob);
-    }
-
-    if (attempt < 2) {
-      await wait(120);
-    }
+function stateFromDocument(snapshot, periodKey) {
+  if (!snapshot.exists) {
+    return createDefaultState(periodKey);
   }
 
-  return null;
+  return normalizeState(snapshot.data(), periodKey);
 }
 
 function isRecentExternalChange(record, clientId) {
@@ -398,134 +303,19 @@ function isRecentExternalChange(record, clientId) {
   return Date.now() - savedAt < FIELD_LOCK_MS;
 }
 
-function createFieldLock(patch, clientId) {
-  const savedAt = new Date();
-
+function createFieldRecord(patch, clientId, revision, savedAt, savedBy) {
   return {
     ...patch,
     clientId,
-    expiresAt: new Date(savedAt.getTime() + FIELD_LOCK_MS).toISOString(),
-    savedAt: savedAt.toISOString(),
-  };
-}
-
-function isBlobAlreadyExistsError(error) {
-  return /already exists|allowOverwrite/i.test(error?.message || "");
-}
-
-async function assertFieldCanBeEdited(patch, clientId, periodKey) {
-  const latestRecord = await readLatestFieldRecord(patch, periodKey);
-
-  if (isRecentExternalChange(latestRecord, clientId)) {
-    throw new FieldLockError(patch, latestRecord, await readDashboardState(periodKey));
-  }
-}
-
-async function acquireFieldLock(patch, clientId, periodKey) {
-  if (!clientId) return;
-
-  const lockPath = getFieldLockPath(patch, periodKey);
-  const lockRecord = createFieldLock(patch, clientId);
-
-  try {
-    await put(lockPath, JSON.stringify(lockRecord), {
-      access: "private",
-      allowOverwrite: false,
-      cacheControlMaxAge: 0,
-      contentType: "application/json",
-    });
-    return;
-  } catch (error) {
-    const existingLock = await readFieldLock(lockPath);
-
-    if (!existingLock) {
-      if (isBlobAlreadyExistsError(error)) {
-        await wait(250);
-        throw new FieldLockError(patch, lockRecord, await readDashboardState(periodKey));
-      }
-
-      throw error;
-    }
-
-    if (isRecentExternalChange(existingLock, clientId)) {
-      throw new FieldLockError(patch, existingLock, await readDashboardState(periodKey));
-    }
-
-    await put(lockPath, JSON.stringify(lockRecord), {
-      access: "private",
-      allowOverwrite: true,
-      cacheControlMaxAge: 0,
-      contentType: "application/json",
-    });
-  }
-}
-
-async function clearFieldLocks(periodKey) {
-  try {
-    const lockPaths = [];
-    let cursor;
-
-    do {
-      const result = await list({
-        cursor,
-        limit: 1000,
-        prefix: `${getLockPrefix(periodKey)}/`,
-      });
-
-      lockPaths.push(...result.blobs.map((blob) => blob.pathname));
-      cursor = result.hasMore ? result.cursor : undefined;
-    } while (cursor);
-
-    if (lockPaths.length) {
-      await del(lockPaths);
-    }
-  } catch (error) {
-    // Stale locks expire quickly, so cleanup failure should not block a forced save.
-  }
-}
-
-async function saveField(patch, savedBy, clientId, periodKey) {
-  const revision = Date.now();
-  const record = {
-    ...patch,
-    clientId,
     revision,
-    savedAt: new Date().toISOString(),
+    savedAt,
     savedBy,
   };
-
-  await put(getFieldPath(patch, revision, periodKey), JSON.stringify(record), {
-    access: "private",
-    allowOverwrite: false,
-    cacheControlMaxAge: 0,
-    contentType: "application/json",
-  });
-
-  await cleanupOldFieldRecords(patch, revision, periodKey);
-
-  return record;
 }
 
-async function cleanupOldFieldRecords(patch, revision, periodKey) {
-  try {
-    const result = await list({
-      limit: 1000,
-      prefix: `${getFieldBase(patch, periodKey)}/`,
-    });
-
-    const oldPaths = result.blobs
-      .map((blob) => {
-        const parsedField = parseFieldPath(blob.pathname, periodKey);
-        return parsedField && parsedField.revision < revision ? blob.pathname : null;
-      })
-      .filter(Boolean);
-
-    if (oldPaths.length) {
-      await del(oldPaths);
-    }
-  } catch (error) {
-    // Cleanup is best effort; failed cleanup should not block user saves.
-  }
+async function readDashboardState(periodKey) {
+  const snapshot = await getPeriodRef(periodKey).get();
+  return stateFromDocument(snapshot, periodKey);
 }
 
 async function saveDashboardUpdate(body, requestPeriodKey) {
@@ -534,35 +324,60 @@ async function saveDashboardUpdate(body, requestPeriodKey) {
   const clientId = normalizeClientId(body?.clientId);
   const force = body?.force === true;
   const patches = Array.isArray(body?.patches)
-    ? body.patches.map(normalizePatch)
+    ? body.patches.map((patch) => normalizePatch(patch, periodKey))
     : body?.patch
-      ? [normalizePatch(body.patch)]
-      : patchesFromState(body?.state || body, periodKey).map(normalizePatch);
+      ? [normalizePatch(body.patch, periodKey)]
+      : patchesFromState(body?.state || body, periodKey).map((patch) => normalizePatch(patch, periodKey));
 
   if (!patches.length) {
     throw new Error("Dashboard update has no patches.");
   }
 
-  const state = await readDashboardState(periodKey);
+  const ref = getPeriodRef(periodKey);
 
-  if (force) {
-    await clearFieldLocks(periodKey);
-  } else {
-    for (const patch of patches) {
-      await assertFieldCanBeEdited(patch, clientId, periodKey);
-      await acquireFieldLock(patch, clientId, periodKey);
+  return getFirestore().runTransaction(async (transaction) => {
+    const snapshot = await transaction.get(ref);
+    const state = stateFromDocument(snapshot, periodKey);
+    const fields = normalizeFields(snapshot.exists ? snapshot.data()?.fields : null);
+
+    if (!force) {
+      for (const patch of patches) {
+        const fieldRecord = fields[getFieldKey(patch, periodKey)];
+
+        if (isRecentExternalChange(fieldRecord, clientId)) {
+          throw new FieldLockError(patch, fieldRecord, state);
+        }
+      }
     }
-  }
 
-  const fieldClientId = force ? "" : clientId;
-  const records = await Promise.all(patches.map((patch) => saveField(patch, savedBy, fieldClientId, periodKey)));
+    const revision = Date.now();
+    const savedAt = new Date(revision).toISOString();
+    const fieldClientId = force ? "" : clientId;
+    const nextFields = { ...fields };
 
-  records.forEach((record) => {
-    applyPatch(state, record);
-    rememberField(state, record);
+    for (const patch of patches) {
+      applyPatch(state, patch);
+      nextFields[getFieldKey(patch, periodKey)] = createFieldRecord(
+        patch,
+        fieldClientId,
+        revision,
+        savedAt,
+        savedBy,
+      );
+    }
+
+    state.revision = Math.max(cleanNumber(state.revision), revision);
+    state.savedAt = savedAt;
+    state.savedBy = savedBy;
+
+    transaction.set(ref, {
+      ...state,
+      fields: nextFields,
+      updatedAt: savedAt,
+    });
+
+    return state;
   });
-
-  return state;
 }
 
 export default async function handler(request, response) {
@@ -577,6 +392,7 @@ export default async function handler(request, response) {
         updatedAt: state.savedAt || null,
       });
     } catch (error) {
+      console.error("Unable to load dashboard state.", error);
       send(response, 500, { error: "Unable to load dashboard state." });
     }
 
@@ -595,6 +411,7 @@ export default async function handler(request, response) {
         updatedAt: state.savedAt || null,
       });
     } catch (error) {
+      console.error("Unable to save dashboard state.", error);
       send(response, error.statusCode || 400, {
         error: error.message || "Unable to save dashboard state.",
         lockExpiresAt: error.lock?.expiresAt || null,
